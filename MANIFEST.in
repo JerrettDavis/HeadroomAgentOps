@@ -11,5 +11,10 @@ include .github/labels.json
 include docs/automation.md
 include docs/public-validation.md
 include docs/security.md
-recursive-include scripts *.py
-recursive-include worker Dockerfile *.py *.json
+include scripts/configure_repository.py
+include scripts/prepare_release.py
+include worker/Dockerfile
+include worker/entry.py
+include worker/smoke.py
+include worker/package.json
+include worker/package-lock.json
