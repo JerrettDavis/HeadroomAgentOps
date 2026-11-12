@@ -11,7 +11,7 @@ from pathlib import Path
 
 from agentops.model import canonical
 from agentops.process import command
-from agentops.worker import Worker, container_command
+from agentops.worker import Worker, container_command, private_job_directory
 from agentops.evidence import Evidence
 
 
@@ -47,8 +47,9 @@ class DockerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.session = str(uuid.uuid4())
         self.directory = self.root / self.session
+        private_job_directory(self.directory)
         for name in ('repo', 'input', 'output', 'auth', 'fakebin'):
-            (self.directory / name).mkdir(parents=True)
+            (self.directory / name).mkdir()
         repo = self.directory / 'repo'
         command(['git', 'init', str(repo)])
         command(['git', 'config', 'user.name', 'Fixture'], cwd=repo)

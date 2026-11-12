@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import uuid
 from pathlib import Path
 
@@ -38,6 +39,35 @@ def safe_job_path(root, name):
     if target.parent != root:
         raise ValueError('Job path escapes owned root')
     return target
+
+
+def private_job_directory(path):
+    """Create an owner-only staging boundary before writing any credentials."""
+    path = Path(path)
+    path.mkdir(mode=0o700)
+    if os.name == 'nt':
+        # Python 3.12 does not translate mode=0700 into a Windows DACL.
+        import csv
+        import subprocess
+        identity = subprocess.check_output(['whoami', '/user', '/fo', 'csv', '/nh'], text=True)
+        sid = next(csv.reader(identity.splitlines()))[1]
+        if not re.fullmatch(r'S-\d+(?:-\d+)+', sid):
+            raise ValueError('Cannot identify the staging directory owner')
+        subprocess.run(['icacls', str(path), '/inheritance:r', '/grant:r', f'*{sid}:(OI)(CI)F'],
+                       check=True, capture_output=True, text=True)
+    return path
+
+
+def stage_model_auth(directory, auth):
+    """Stage model-only auth beneath a private job directory for a read-only mount."""
+    target = Path(directory) / 'auth'
+    for name, source in auth['files'].items():
+        destination = target / name
+        shutil.copyfile(source, destination)
+        destination.chmod(0o600)
+    with (target / 'model-env.json').open('x', encoding='utf8') as output:
+        (target / 'model-env.json').chmod(0o600)
+        output.write(canonical(auth['env']))
 
 
 def auth_plan(harness, environ, auth_root, copilot_scopes=None):
@@ -107,12 +137,17 @@ def container_command(root, session_id, image):
         raise ValueError('Container bind source cannot contain a comma')
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
         raise ValueError('Worker image must be resolved to an immutable local sha256 ID')
+    uid, gid = 1000, 1000
+    if sys.platform.startswith('linux'):
+        uid, gid = os.getuid(), os.getgid()
+        if uid == 0 or gid == 0:
+            raise ValueError('Linux workers require a non-root coordinator UID and GID')
     args = ['docker', 'create', '--name', f'agentops-{session_id}',
             '--label', f'agentops.session={session_id}', '--read-only', '--cap-drop=ALL',
-            '--security-opt', 'no-new-privileges', '--user', '1000:1000',
+            '--security-opt', 'no-new-privileges', '--user', f'{uid}:{gid}',
             '--pids-limit', '512', '--memory', '8g', '--cpus', '2',
             '--tmpfs', '/tmp:rw,nosuid,exec,size=1g',
-            '--tmpfs', '/home/node:rw,nosuid,exec,uid=1000,gid=1000,size=1g',
+            '--tmpfs', f'/home/node:rw,nosuid,exec,uid={uid},gid={gid},size=1g',
             '--workdir', '/workspace', '--env', 'HOME=/home/node',
             '--env', 'GIT_CONFIG_NOSYSTEM=1', '--env', 'GIT_CONFIG_GLOBAL=/dev/null',
             '--env', 'GIT_CONFIG_COUNT=1', '--env', 'GIT_CONFIG_KEY_0=safe.directory',
@@ -149,7 +184,7 @@ class Worker:
     def prepare(self, job, pr, evidence, packet_text):
         session_id = str(uuid.uuid4())
         directory = safe_job_path(self.root, session_id)
-        directory.mkdir()
+        private_job_directory(directory)
         for name in ('repo', 'input', 'output', 'auth'):
             (directory / name).mkdir()
         checkout = directory / 'repo'
@@ -166,9 +201,7 @@ class Worker:
         self._git(['config', 'user.email', 'agentops@users.noreply.github.com'], checkout)
         auth = auth_plan(self.harness, os.environ if self.model_env is None else self.model_env,
                          self.auth_root, self.copilot_scopes)
-        for name, source in auth['files'].items():
-            shutil.copyfile(source, directory / 'auth' / name)
-        (directory / 'auth' / 'model-env.json').write_text(canonical(auth['env']), encoding='utf8')
+        stage_model_auth(directory, auth)
         (directory / 'input' / 'packet.json').write_text(packet_text, encoding='utf8')
         packet_data = json.loads(packet_text)
         for key in ('evidence', 'context_evidence', 'raw_api_evidence'):

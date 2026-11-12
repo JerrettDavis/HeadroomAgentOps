@@ -56,6 +56,7 @@ def main():
                              'secret_scanning_push_protection': {'status': 'enabled'},
                          }}),
         ('PUT', f'{base}/vulnerability-alerts', None),
+        ('PUT', f'{base}/automated-security-fixes', None),
         ('PUT', f'{base}/private-vulnerability-reporting', None),
         ('PUT', f'{base}/actions/permissions/workflow',
          {'default_workflow_permissions': 'read', 'can_approve_pull_request_reviews': False}),
@@ -76,6 +77,10 @@ def main():
         if method == 'TAG_POLICY':
             result = subprocess.run(['gh', 'api', endpoint], check=True, capture_output=True, text=True)
             policies = json.loads(result.stdout)['branch_policies']
+            for item in policies:
+                if item['name'] != body['name'] or item['type'] != body['type']:
+                    subprocess.run(['gh', 'api', '--method', 'DELETE', f'{endpoint}/{item["id"]}'],
+                                   check=True, capture_output=True)
             if not any(item['name'] == body['name'] and item['type'] == body['type'] for item in policies):
                 subprocess.run(['gh', 'api', '--method', 'POST', endpoint, '--input', '-'],
                                input=json.dumps(body), text=True, check=True, capture_output=True)
