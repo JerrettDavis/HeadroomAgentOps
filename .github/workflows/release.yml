@@ -38,7 +38,7 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
         working-directory: worker
       - run: python -m unittest discover -s tests -v
-      - run: docker build -f worker/Dockerfile -t headroom-agentops-worker:local .
+      - run: docker build --build-arg SOURCE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --build-arg SOURCE_REVISION="$GITHUB_SHA" -f worker/Dockerfile -t headroom-agentops-worker:local .
       - run: python -m unittest discover -s tests -p test_docker.py -v
         env:
           AGENTOPS_DOCKER_TESTS: '1'
@@ -47,18 +47,30 @@ jobs:
         run: python -c "import os,tomllib; v=tomllib.load(open('pyproject.toml','rb'))['project']['version']; assert os.environ['GITHUB_REF_NAME'] == 'v'+v, 'Tag must match project version'"
       - run: python -m build
       - run: python -m twine check dist/*
+      - name: Prepare public installation assets
+        id: release
+        run: python scripts/prepare_release.py --repository "$GITHUB_REPOSITORY"
       - name: Archive tested worker image
-        run: docker save headroom-agentops-worker:local -o worker-image.tar
+        shell: bash
+        env:
+          RELEASE_IMAGE: ${{ steps.release.outputs.image }}
+        run: |
+          docker tag headroom-agentops-worker:local "$RELEASE_IMAGE"
+          docker save "$RELEASE_IMAGE" | gzip -1 > dist/worker-image-linux-amd64.tar.gz
+          cd dist
+          sha256sum worker-image-linux-amd64.tar.gz >> SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-worker
-          path: worker-image.tar
+          path: dist/worker-image-linux-amd64.tar.gz
           compression-level: 0
           retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-package
-          path: dist/*
+          path: |
+            dist/*
+            !dist/worker-image-linux-amd64.tar.gz
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: qualify
@@ -76,18 +88,28 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-worker
-          path: worker-image
+          path: dist
       - name: Publish worker image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}/worker:${GITHUB_REF_NAME}"
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker load -i worker-image/worker-image.tar
-          docker tag headroom-agentops-worker:local "$image"
+          docker load -i dist/worker-image-linux-amd64.tar.gz
+          docker image inspect "$image"
           docker push "$image"
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            latest="ghcr.io/${GITHUB_REPOSITORY,,}/worker:latest"
+            docker tag "$image" "$latest"
+            docker push "$latest"
+          fi
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
+        run: |
+          flags=()
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --notes-file dist/INSTALL.md "${flags[@]}"

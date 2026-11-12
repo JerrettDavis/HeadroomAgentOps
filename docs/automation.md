@@ -20,6 +20,14 @@ Python coordinator and its Docker workers.
   cannot publish even when dispatched on a tag. No production coordinator service or hosting
   target is currently defined; deployment consists of distributing these
   installable artifacts. Operators retain local configuration and credentials.
+- Tagged releases attach wheel/source packages, an example configured for the
+  matching versioned worker image, an installation guide and SHA-256 checksums.
+  Stable tags publish both the versioned GHCR image and a `latest` alias; the
+  coordinator and image share a version. Source/revision OCI labels link images
+  to this repository. `scripts/prepare_release.py` derives all generated links
+  from the active GitHub repository and project version, including after transfer.
+  A compressed copy of the tested worker image is also attached to the public
+  release for direct download/offline loading; its digest is in `SHA256SUMS`.
 - Issue forms and the PR template collect reproduction and validation evidence.
   Run the manual Sync labels workflow to create/update the declared labels;
   it preserves unrelated labels. PRs receive documentation, CI, test, dependency
@@ -48,6 +56,13 @@ private vulnerability reporting where available. CodeQL requires GitHub Code
 Security for private repositories. Configure the `release` environment with
 required reviewers and tag restrictions before publishing tags. Enable GHCR
 package writes for the workflow token. Run Sync labels once.
+
+For the first GHCR publication, open the worker package from the repository's
+Packages list and change its package visibility to public. GitHub initially
+creates GHCR packages as private, even when the linked repository is public.
+Confirm an anonymous `docker pull` afterward. Public release image archives
+remain available independently through GitHub Releases. After an organization
+transfer, verify package ownership/access and public visibility again.
 
 Release artifacts and images are publication outputs, not authorization to run
 review or publication against an upstream repository. No model credentials or
