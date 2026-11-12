@@ -16,3 +16,6 @@ updates:
     directory: /worker
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: node
+        versions: ["25.x"] # End of life; retain supported Node 24 LTS.
