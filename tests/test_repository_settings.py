@@ -19,7 +19,7 @@ class RepositorySettingsTests(unittest.TestCase):
             (root / '.github').mkdir()
             (root / '.github/repository.json').write_text(json.dumps({
                 'repository': 'old/project', 'default_branch': 'main', 'description': 'Test',
-                'required_checks': ['test'], 'required_approvals': 1,
+                'required_checks': ['test'], 'required_approvals': 1, 'allow_auto_merge': True,
                 'release_environment': 'production-release', 'release_reviewers': ['maintainer'],
                 'release_tag_pattern': 'v*'}))
             (root / '.github/labels.json').write_text('[]')
@@ -48,6 +48,9 @@ class RepositorySettingsTests(unittest.TestCase):
             environment = next(json.loads(kwargs['input']) for command, kwargs in calls
                                if command[-3:] == ['repos/new/project/environments/production-release', '--input', '-'])
             self.assertEqual(environment['reviewers'], [{'type': 'User', 'id': 42}])
+            repository = next(json.loads(kwargs['input']) for command, kwargs in calls
+                              if command[-3:] == ['repos/new/project', '--input', '-'])
+            self.assertTrue(repository['allow_auto_merge'])
 
 
 if __name__ == '__main__':
