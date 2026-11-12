@@ -6,6 +6,49 @@ Read [validation scope](docs/public-validation.md) for checks and qualification 
 
 ## Setup
 
+### Install a release
+
+Install Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
+
+```sh
+uv tool install "https://github.com/JerrettDavis/HeadroomAgentOps/releases/download/v0.1.0/headroom_agentops-0.1.0-py3-none-any.whl"
+headroom-review --help
+```
+
+The same commands work in PowerShell. `pipx install <wheel-URL>` is an alternative.
+The [latest release](https://github.com/JerrettDavis/HeadroomAgentOps/releases/latest)
+includes version-matched installation instructions, wheel/source packages, an
+example configuration and SHA-256 checksums. No source checkout is needed.
+
+For review workers, also install Git, GitHub CLI and Docker with Linux containers:
+
+```sh
+docker pull ghcr.io/jerrettdavis/headroomagentops/worker:v0.1.0
+gh auth login
+gh release download v0.1.0 --repo JerrettDavis/HeadroomAgentOps --pattern agentops.example.toml
+```
+
+Copy the downloaded example to `agentops.toml` in a working directory and set
+`repo` to the repository you want reviewed. The release config already selects
+the matching worker image. Configure model authentication as described below,
+then run `headroom-review doctor` and `headroom-review run --limit 1 --no-publish`.
+Use `headroom-review status --details` or `headroom-review panel` to inspect work.
+
+The prebuilt worker image targets Linux amd64; other architectures can build it
+from source. Linux coordinators must run as a non-root user with a non-root
+primary group. The worker image is launched by the coordinator; it is not a
+standalone server. The `latest` image alias follows stable releases, while
+versioned image tags are recommended for reproducible operation.
+Each release also includes `worker-image-linux-amd64.tar.gz`, which can be
+downloaded directly and loaded with `docker load --input <archive>` for offline
+or registry-independent setup. It loads the same versioned image tag as the config.
+
+### Develop from source
+
+Clone this repository and use the reviewer setup below. The remaining launcher
+examples show source-checkout usage; installed users can replace
+`.\headroom-review.ps1` or `./headroom-review.sh` with `headroom-review`.
+
 ### Web panel
 
 Run the dashboard against the same state directory used by your coordinator:

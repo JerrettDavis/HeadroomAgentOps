@@ -34,9 +34,38 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install build twine
+      - name: Create incidental files to verify release allowlist
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for name in ('worker/node_modules/fixture/package.json', 'worker/local-auth-fixture.json',
+                       'scripts/internal-fixture.py', 'docs/internal-fixture.md'):
+              path = Path(name)
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text('synthetic fixture: must not ship')
+          PY
       - run: python -m build
       - run: python -m twine check dist/*
+      - name: Verify usable source package and private-data exclusion
+        run: |
+          python - <<'PY'
+          import pathlib, tarfile
+          archive = next(pathlib.Path('dist').glob('*.tar.gz'))
+          with tarfile.open(archive) as source:
+              names = {'/'.join(item.name.split('/')[1:]) for item in source.getmembers()}
+          required = {'worker/Dockerfile', 'worker/package-lock.json', 'worker/entry.py',
+                      'scripts/prepare_release.py', 'scripts/configure_repository.py',
+                      '.github/repository.json', 'agentops.example.toml', 'agentops/panel.html'}
+          assert required <= names, 'Missing source package support files: ' + str(required - names)
+          assert not any(name.startswith(('.agentops/', '.remember/', '.serena/', 'docs/superpowers/')) for name in names)
+          assert 'agentops.toml' not in names and 'docs/validation.md' not in names
+          assert not any('/node_modules/' in name for name in names)
+          assert not names.intersection({'worker/local-auth-fixture.json', 'scripts/internal-fixture.py', 'docs/internal-fixture.md'})
+          PY
       - run: python -m pip install dist/*.whl
+      - run: headroom-review --help
+        working-directory: ${{ runner.temp }}
+      - run: python -m pip install --force-reinstall dist/*.tar.gz
       - run: headroom-review --help
         working-directory: ${{ runner.temp }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -52,7 +81,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install .
-      - run: docker build -f worker/Dockerfile -t headroom-agentops-worker:local .
+      - run: docker build --build-arg SOURCE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --build-arg SOURCE_REVISION="$GITHUB_SHA" -f worker/Dockerfile -t headroom-agentops-worker:local .
       - run: python -m unittest discover -s tests -p test_docker.py -v
         env:
           AGENTOPS_DOCKER_TESTS: '1'
