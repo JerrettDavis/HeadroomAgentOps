@@ -18,6 +18,41 @@ def result():
 
 
 class WorkerTests(unittest.TestCase):
+    def test_staged_model_credentials_are_private_and_cannot_reuse_env_file(self):
+        import os
+        from agentops.worker import private_job_directory, stage_model_auth
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = private_job_directory(root / 'job')
+            (job / 'auth').mkdir()
+            source = root / 'source.json'
+            source.write_text('{"token":"synthetic-test-value"}')
+            auth = {'files': {'auth.json': source}, 'env': {'OPENAI_API_KEY': 'synthetic-test-value'}}
+            stage_model_auth(job, auth)
+            self.assertEqual(json.loads((job / 'auth/model-env.json').read_text()), auth['env'])
+            self.assertEqual((job / 'auth/auth.json').read_text(), source.read_text())
+            if os.name != 'nt':
+                for name in ('model-env.json', 'auth.json'):
+                    self.assertEqual((job / 'auth' / name).stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                stage_model_auth(job, auth)
+
+    def test_private_job_directory_locks_down_posix_permissions(self):
+        import os
+        from agentops.worker import private_job_directory
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'job'
+            private_job_directory(path)
+            self.assertTrue(path.is_dir())
+            if os.name != 'nt':
+                self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+            else:
+                import subprocess
+                acl = subprocess.check_output(['icacls', str(path)], text=True)
+                self.assertNotIn('(I)', acl)
+                self.assertNotIn('Everyone', acl)
+                self.assertNotIn('BUILTIN\\Users', acl)
+
     def test_linux_bind_mounts_and_home_use_coordinator_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -4,6 +4,18 @@ On Linux, run the coordinator as a non-root user with a non-root primary group.
 Workers map that UID/GID so private bind-mounted job files remain writable
 without granting world access. Docker Desktop retains the image's UID/GID 1000.
 
+Before staging model credentials, both the coordinator and harness smoke tool
+create an owner-only job directory: mode 0700 on POSIX, or an explicit current-user
+DACL with inherited grants removed on Windows (including Python 3.12). Credential
+files use mode 0600 where POSIX modes apply. Staging fails if Windows ACL setup
+fails. Workers receive these files through a read-only auth mount; terminal-worker
+cleanup removes them. A live worker necessarily retains its selected model-only
+credentials until cleanup. CodeQL's clear-text-storage rule can flag this intended
+credential handoff; the control is private ephemeral staging, not encryption with
+a co-located decryption key. The trusted host and its administrator remain inside
+the security boundary. Use encrypted local storage when at-rest protection from
+offline disk access is required.
+
 The coordinator retains GitHub credentials and owns every external write. Workers run as a nonroot user in disposable Linux containers with a read-only root, no capabilities, no-new-privileges, resource limits and an intrinsic time budget. Workers receive only their checkout, inputs, output directory and selected model authentication. They receive no host home, primary checkout, shared Git metadata, publisher credentials or Docker socket.
 
 Model authentication remains accessible to the selected harness inside the container. Network access is available for inference and ordinary dependency retrieval. Treat PR content as untrusted; container isolation does not make arbitrary code trustworthy. Workflow and installer execution requires source review; unknown provenance remains a hold.

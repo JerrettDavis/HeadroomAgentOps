@@ -7,7 +7,6 @@ The stdout contains only process identity; inspect output after it exits.
 import argparse
 import json
 import os
-import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -15,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agentops.model import canonical
 from agentops.process import command
-from agentops.worker import auth_plan, container_command, verify_copilot_scopes
+from agentops.worker import auth_plan, container_command, verify_copilot_scopes, private_job_directory, stage_model_auth
 
 
 def main():
@@ -26,8 +25,10 @@ def main():
     args = parser.parse_args()
     session = str(uuid.uuid4())
     directory = Path('.agentops/smoke', session).resolve()
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    private_job_directory(directory)
     for name in ('repo', 'input', 'output', 'auth'):
-        (directory / name).mkdir(parents=True, exist_ok=True)
+        (directory / name).mkdir()
     command(['git', 'init', str(directory / 'repo')])
     assignment = {'schema': 1, 'session_id': session, 'number': 1, 'head_sha': 'b' * 40,
                   'main_sha': 'a' * 40, 'harness': args.harness, 'model': args.model, 'timeout_seconds': 120}
@@ -40,9 +41,7 @@ def main():
     scopes = (verify_copilot_scopes(os.environ) if args.harness == 'copilot' and
               not os.environ.get('COPILOT_PROVIDER_BASE_URL') else None)
     auth = auth_plan(args.harness, os.environ, args.auth_root, scopes)
-    for name, source in auth['files'].items():
-        shutil.copyfile(source, directory / 'auth' / name)
-    (directory / 'auth' / 'model-env.json').write_text(canonical(auth['env']), encoding='utf8')
+    stage_model_auth(directory, auth)
     image = command(['docker', 'image', 'inspect', 'headroom-agentops-worker:local', '--format', '{{.Id}}'])
     identity = command(container_command(directory, session, image))
     command(['docker', 'start', identity])

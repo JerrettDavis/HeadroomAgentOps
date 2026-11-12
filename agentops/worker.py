@@ -41,6 +41,35 @@ def safe_job_path(root, name):
     return target
 
 
+def private_job_directory(path):
+    """Create an owner-only staging boundary before writing any credentials."""
+    path = Path(path)
+    path.mkdir(mode=0o700)
+    if os.name == 'nt':
+        # Python 3.12 does not translate mode=0700 into a Windows DACL.
+        import csv
+        import subprocess
+        identity = subprocess.check_output(['whoami', '/user', '/fo', 'csv', '/nh'], text=True)
+        sid = next(csv.reader(identity.splitlines()))[1]
+        if not re.fullmatch(r'S-\d+(?:-\d+)+', sid):
+            raise ValueError('Cannot identify the staging directory owner')
+        subprocess.run(['icacls', str(path), '/inheritance:r', '/grant:r', f'*{sid}:(OI)(CI)F'],
+                       check=True, capture_output=True, text=True)
+    return path
+
+
+def stage_model_auth(directory, auth):
+    """Stage model-only auth beneath a private job directory for a read-only mount."""
+    target = Path(directory) / 'auth'
+    for name, source in auth['files'].items():
+        destination = target / name
+        shutil.copyfile(source, destination)
+        destination.chmod(0o600)
+    with (target / 'model-env.json').open('x', encoding='utf8') as output:
+        (target / 'model-env.json').chmod(0o600)
+        output.write(canonical(auth['env']))
+
+
 def auth_plan(harness, environ, auth_root, copilot_scopes=None):
     files, env = {}, {}
     if harness == 'codex':
@@ -155,7 +184,7 @@ class Worker:
     def prepare(self, job, pr, evidence, packet_text):
         session_id = str(uuid.uuid4())
         directory = safe_job_path(self.root, session_id)
-        directory.mkdir()
+        private_job_directory(directory)
         for name in ('repo', 'input', 'output', 'auth'):
             (directory / name).mkdir()
         checkout = directory / 'repo'
@@ -172,9 +201,7 @@ class Worker:
         self._git(['config', 'user.email', 'agentops@users.noreply.github.com'], checkout)
         auth = auth_plan(self.harness, os.environ if self.model_env is None else self.model_env,
                          self.auth_root, self.copilot_scopes)
-        for name, source in auth['files'].items():
-            shutil.copyfile(source, directory / 'auth' / name)
-        (directory / 'auth' / 'model-env.json').write_text(canonical(auth['env']), encoding='utf8')
+        stage_model_auth(directory, auth)
         (directory / 'input' / 'packet.json').write_text(packet_text, encoding='utf8')
         packet_data = json.loads(packet_text)
         for key in ('evidence', 'context_evidence', 'raw_api_evidence'):
