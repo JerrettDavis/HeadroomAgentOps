@@ -1,0 +1,16 @@
+name: Bug report
+description: Report a reproducible problem
+labels: [bug]
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include commands, expected and actual behavior, OS, Python version and harness version. Remove tokens and private review data.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs and evidence
+      description: Provide redacted logs and relevant configuration.

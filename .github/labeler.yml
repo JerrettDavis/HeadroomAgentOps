@@ -1,0 +1,15 @@
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: ['docs/**', '*.md', '.github/ISSUE_TEMPLATE/**', '.github/pull_request_template.md']
+ci:
+  - changed-files:
+      - any-glob-to-any-file: ['.github/workflows/**', '.github/dependabot.yml', '.github/labeler.yml', '.github/labels.json']
+tests:
+  - changed-files:
+      - any-glob-to-any-file: ['tests/**']
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file: ['uv.lock', 'worker/package.json', 'worker/package-lock.json', 'pyproject.toml', 'worker/Dockerfile']
+security:
+  - changed-files:
+      - any-glob-to-any-file: ['agentops/publisher.py', 'agentops/transport.py', 'agentops/redaction.py', 'docs/security.md', 'SECURITY.md']

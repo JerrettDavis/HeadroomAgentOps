@@ -1,0 +1,8 @@
+*
+!agentops/
+!agentops/*.py
+!worker/
+!worker/Dockerfile
+!worker/entry.py
+!worker/package.json
+!worker/package-lock.json

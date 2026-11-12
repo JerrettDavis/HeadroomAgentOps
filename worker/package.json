@@ -1,0 +1,10 @@
+{
+  "name": "headroom-agentops-harnesses",
+  "private": true,
+  "version": "0.1.0",
+  "dependencies": {
+    "@openai/codex": "0.167.1",
+    "@anthropic-ai/claude-code": "2.1.322",
+    "@github/copilot": "1.0.109"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "repository": "JerrettDavis/HeadroomAgentOps",
+  "default_branch": "main",
+  "description": "Bounded PR review coordination with isolated agent workers and guarded publication",
+  "required_approvals": 1,
+  "required_checks": [
+    "test (ubuntu-latest, 3.12)",
+    "test (ubuntu-latest, 3.13)",
+    "test (ubuntu-latest, 3.14)",
+    "test (windows-latest, 3.12)",
+    "test (windows-latest, 3.13)",
+    "test (windows-latest, 3.14)",
+    "package", "e2e", "audit", "codeql"
+  ],
+  "release_environment": "release",
+  "release_reviewers": ["JerrettDavis"],
+  "release_tag_pattern": "v*"
+}

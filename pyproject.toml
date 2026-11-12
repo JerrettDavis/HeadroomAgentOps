@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "headroom-agentops"
+version = "0.1.0"
+description = "Bounded, single-PR agent review coordination"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["PyYAML==6.0.3"]
+
+[project.scripts]
+headroom-review = "agentops.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agentops*"]
+
+[tool.setuptools.package-data]
+agentops = ["panel.html"]

@@ -1,0 +1,14 @@
+repo = "headroomlabs-ai/headroom"
+state = ".agentops"
+harness = "codex"
+concurrency = 2
+image = "headroom-agentops-worker:local"
+# Model selection is optional; omit to use the harness's default.
+# model = "your-model"
+# Copy only model auth, never inherited tools, MCP configs or GitHub credentials.
+# auth_root = "C:/Users/you/.codex"
+# First validate without publication, then enable safe maintainer actions.
+publish = false
+timeout_seconds = 3600
+packet_budget = 24576
+poll_seconds = 5
