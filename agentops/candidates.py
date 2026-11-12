@@ -25,7 +25,10 @@ class CandidatePublisher:
         env = {**os.environ, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
                'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'}
         prefix = ['git', '--no-replace-objects', '-c', 'core.hooksPath=' + os.devnull,
-                  '-c', 'core.fsmonitor=false', '-c', 'credential.helper=']
+                  '-c', 'core.fsmonitor=false', '-c', 'credential.helper=',
+                  # Disposable repositories must not leave detached writers
+                  # racing the coordinator or temporary-directory cleanup.
+                  '-c', 'maintenance.auto=false', '-c', 'gc.auto=0']
         if authenticated:
             prefix += ['-c', 'credential.helper=!gh auth git-credential']
         return self.runner([*prefix, *args], cwd=cwd, env=env, timeout=600)
