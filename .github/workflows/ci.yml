@@ -36,7 +36,24 @@ jobs:
       - run: python -m pip install build twine
       - run: python -m build
       - run: python -m twine check dist/*
+      - name: Verify usable source package and private-data exclusion
+        run: |
+          python - <<'PY'
+          import pathlib, tarfile
+          archive = next(pathlib.Path('dist').glob('*.tar.gz'))
+          with tarfile.open(archive) as source:
+              names = {'/'.join(item.name.split('/')[1:]) for item in source.getmembers()}
+          required = {'worker/Dockerfile', 'worker/package-lock.json', 'worker/entry.py',
+                      'scripts/prepare_release.py', 'scripts/configure_repository.py',
+                      '.github/repository.json', 'agentops.example.toml', 'agentops/panel.html'}
+          assert required <= names, 'Missing source package support files: ' + str(required - names)
+          assert not any(name.startswith(('.agentops/', '.remember/', '.serena/', 'docs/superpowers/')) for name in names)
+          assert 'agentops.toml' not in names and 'docs/validation.md' not in names
+          PY
       - run: python -m pip install dist/*.whl
+      - run: headroom-review --help
+        working-directory: ${{ runner.temp }}
+      - run: python -m pip install --force-reinstall dist/*.tar.gz
       - run: headroom-review --help
         working-directory: ${{ runner.temp }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -1,0 +1,15 @@
+include agentops.example.toml
+include uv.lock
+include .dockerignore
+include .gitignore
+include headroom-review.sh
+include headroom-review.ps1
+include CONTRIBUTING.md
+include SECURITY.md
+include .github/repository.json
+include .github/labels.json
+include docs/automation.md
+include docs/public-validation.md
+include docs/security.md
+recursive-include scripts *.py
+recursive-include worker Dockerfile *.py *.json
