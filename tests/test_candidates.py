@@ -11,6 +11,17 @@ from agentops.evidence import Evidence
 
 
 class CandidateTests(unittest.TestCase):
+    def test_trusted_git_disables_background_maintenance_even_if_repo_enables_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / 'trusted.git'
+            command(['git', 'init', '--bare', str(repo)])
+            command(['git', 'config', 'maintenance.auto', 'true'], cwd=repo)
+            command(['git', 'config', 'gc.auto', '1'], cwd=repo)
+            publisher = CandidatePublisher(root / 'publisher', None)
+            self.assertEqual(publisher.git(['config', '--get', 'maintenance.auto'], repo), 'false')
+            self.assertEqual(publisher.git(['config', '--get', 'gc.auto'], repo), '0')
+
     def test_actual_bundle_import_and_leased_fast_forward_push_preserve_author_history(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
