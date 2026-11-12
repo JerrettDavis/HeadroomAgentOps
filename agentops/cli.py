@@ -63,7 +63,7 @@ def parser():
     cli.add_argument('--state')
     sub = cli.add_subparsers(dest='command', required=True)
     sub.add_parser('doctor', help='Inspect installed tools, isolated image and model authentication')
-    panel = sub.add_parser('panel', help='Serve the local read-only review dashboard')
+    panel = sub.add_parser('panel', help='Serve the local review dashboard and launch wizard')
     panel.add_argument('--host', default='127.0.0.1', choices=['127.0.0.1', 'localhost', '::1'])
     panel.add_argument('--port', type=int, default=8765)
     inventory = sub.add_parser('plan', help='Read-only inventory, sort and persist an immutable plan')
@@ -149,7 +149,7 @@ def main(argv=None):
         root = Path(config['state']).resolve()
         if args.command == 'panel':
             from .panel import serve
-            serve(root / 'ledger.sqlite3', args.host, args.port)
+            serve(root / 'ledger.sqlite3', args.host, args.port, config)
             return 0
         ledger, evidence = Ledger(root / 'ledger.sqlite3'), Evidence(root / 'evidence')
         github = GitHub(config['repo'])
