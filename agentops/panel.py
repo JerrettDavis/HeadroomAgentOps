@@ -261,12 +261,55 @@ def archived_diff(root, identity, expected_head, repository):
         return git('-C', str(repo), 'diff', '--no-ext-diff', '--no-textconv', '--no-color', head, candidate)
 
 
-def make_server(path, host='127.0.0.1', port=8765):
+def make_server(path, host='127.0.0.1', port=8765, config=None):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise ValueError('The panel binds to loopback only')
     page = Path(__file__).with_name('panel.html')
+    import secrets
+    from .launch import Launcher
+    from .cli import DEFAULTS
+    launcher = Launcher(path, config or DEFAULTS)
+    token = secrets.token_urlsafe(32)
 
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            origin = self.headers.get('Origin')
+            host = self.headers.get('Host', '')
+            try:
+                valid_host = urlsplit('//' + host).hostname in ('127.0.0.1', 'localhost', '::1')
+            except ValueError:
+                valid_host = False
+            if (not valid_host or origin != 'http://' + host or
+                    not secrets.compare_digest(self.headers.get('X-Launch-Token', ''), token)):
+                self.send_error(403, 'Same-origin launch token required')
+                return
+            try:
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= 65536:
+                    raise ValueError('Invalid request size')
+                payload = json.loads(self.rfile.read(size))
+                if not isinstance(payload, dict):
+                    raise ValueError('JSON object required')
+                if self.path == '/api/preview':
+                    result = launcher.preview(payload)
+                elif self.path == '/api/launch':
+                    result = launcher.launch(payload)
+                else:
+                    self.send_error(404)
+                    return
+                status = 200
+            except (ValueError, TypeError, KeyError) as error:
+                status, result = 400, {'error': str(error)}
+            except Exception:
+                status, result = 503, {'error': 'Review launch unavailable. Check GitHub authentication and the panel configuration, then preview again.'}
+            body = redact(json.dumps(result)).encode()
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
             try:
                 allowed = urlsplit('//' + self.headers.get('Host', '')).hostname in ('127.0.0.1', 'localhost', '::1')
@@ -279,6 +322,12 @@ def make_server(path, host='127.0.0.1', port=8765):
             status, content_type = 200, 'application/json; charset=utf-8'
             if url.path == '/':
                 body, content_type = page.read_bytes(), 'text/html; charset=utf-8'
+            elif url.path == '/api/launcher':
+                body = json.dumps({'token': token, 'repo': launcher.config['repo'],
+                                   'harness': launcher.config['harness'],
+                                   'model': launcher.config['model'],
+                                   'concurrency': launcher.config['concurrency'],
+                                   'processes': launcher.status()}).encode()
             elif url.path == '/api/report':
                 try:
                     body = redact(json.dumps(report(path, parse_qs(url.query).get('run', [None])[0]), ensure_ascii=False)).encode()
@@ -317,8 +366,8 @@ def make_server(path, host='127.0.0.1', port=8765):
     return ThreadingHTTPServer((host, port), Handler)
 
 
-def serve(path, host='127.0.0.1', port=8765):
-    with make_server(path, host, port) as server:
+def serve(path, host='127.0.0.1', port=8765, config=None):
+    with make_server(path, host, port, config) as server:
         print(f'Reviewer panel: http://{host}:{server.server_port} (Ctrl+C to stop)', flush=True)
         try:
             server.serve_forever()

@@ -58,7 +58,26 @@ cd G:\git\HeadroomAgentOps
 .venv\Scripts\python.exe -m agentops --state .agentops panel --port 8765
 ```
 
-Open <http://127.0.0.1:8765>. The panel needs Python and an existing ledger; Docker and model authentication are not needed to view it. It binds to loopback and does not dispatch, publish, retry, or modify ledger data. Stop the server with Ctrl+C.
+Open <http://127.0.0.1:8765>. Viewing the panel needs Python; Docker and model authentication are not needed to view saved work. It binds to loopback. Stop the server with Ctrl+C.
+
+Choose **New review** to start an individual PR, a batch of PR numbers or GitHub
+URLs, all open PRs, or a GitHub query such as `author:username label:bug`.
+Queries are scoped to the configured repository; incomplete searches or searches
+over 1,000 results must be narrowed. Preview the matching PRs, deselect any you
+want to exclude, and choose **Start selected reviews**. Previews expire after
+30 minutes; changed or closed PRs require another preview.
+
+The wizard uses the repository, worker image, and authentication settings from
+`--config` (default `agentops.toml`). Choose a harness, optional model, and 1–4
+parallel workers. Publication starts off; enabling it permits the coordinator's
+existing guarded publication of feedback, fixes, and CI actions. Launching requires GitHub CLI
+authentication, Docker, the worker image, and the selected harness's model
+credentials, just like `run`. Each selected PR gets a fresh isolated session;
+wizard launches bypass reuse of earlier review evidence.
+The new run appears in the run selector. Coordinator errors are reported in the
+panel; full launch logs are retained under `<state>/launches/<run-id>.log`.
+Closing the browser or stopping the panel leaves launched coordinators running;
+use `headroom-review --state <state> stop <run-id>` to stop dispatch.
 
 Select a run to inspect its queue, captured CI/review/conflict indicators, PR details, agent sessions, attempt history, review evidence, and comment publication receipts. Search the queue, drill into a PR, and switch between Details, Diffs, Comments, Review evidence, and Sessions. Themes follow the system by default, with persistent light/dark overrides. The ledger refreshes every five seconds; pause Auto to hold the view.
 
