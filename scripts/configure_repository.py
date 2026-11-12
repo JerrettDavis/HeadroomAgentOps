@@ -50,7 +50,8 @@ def main():
     operations = [
         ('PATCH', base, {'description': settings['description'],
                          'default_branch': settings['default_branch'],
-                         'delete_branch_on_merge': True, 'allow_auto_merge': False,
+                         'delete_branch_on_merge': True,
+                         'allow_auto_merge': settings.get('allow_auto_merge', False),
                          'security_and_analysis': {
                              'secret_scanning': {'status': 'enabled'},
                              'secret_scanning_push_protection': {'status': 'enabled'},

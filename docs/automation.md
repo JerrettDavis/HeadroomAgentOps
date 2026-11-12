@@ -48,6 +48,10 @@ main-branch protection and a reviewer-gated release environment restricted to
 `v*` tags. An explicit `--repository owner/name` takes precedence, followed by
 GitHub environment context, the current remote, and the central fallback.
 
+Repository auto-merge is enabled through `allow_auto_merge` in the central JSON
+settings. Auto-merge still requires branch protection checks and reviews; enabling
+the repository feature does not automatically enroll every PR.
+
 Enable Actions. Set the default branch to main (or master, both supported).
 Configure branch protection to require all CI matrix jobs, package, e2e and
 security checks. Require PR review and resolved conversations; restrict bypasses.
