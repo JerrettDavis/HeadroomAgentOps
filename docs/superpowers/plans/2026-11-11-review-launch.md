@@ -7,11 +7,11 @@ panel serves the wizard and protected POST routes.
 **Stack:** Python standard library, SQLite, existing HTML/CSS/JavaScript.
 **Spec:** `docs/superpowers/specs/2026-11-11-review-launch-design.md`.
 
-- [ ] Add selection/preview/launch service and tests for invalid selections,
+- [x] Add selection/preview/launch service and tests for invalid selections,
   complete query pagination, stale heads, subprocess arguments and idempotency.
-- [ ] Extend panel routes and CLI configuration plumbing; test same-origin and
+- [x] Extend panel routes and CLI configuration plumbing; test same-origin and
   token checks, and ensure GET routes retain read-only behavior.
-- [ ] Add an accessible wizard with settings, selection checkboxes, launch state,
+- [x] Add an accessible wizard with settings, selection checkboxes, launch state,
   and errors; document operation and verify the actual browser flow.
 - [ ] Run the suite, inspect the diff, push and land on origin/main, then verify
   the remote commit and required checks.

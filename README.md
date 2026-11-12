@@ -70,7 +70,7 @@ want to exclude, and choose **Start selected reviews**. Previews expire after
 The wizard uses the repository, worker image, and authentication settings from
 `--config` (default `agentops.toml`). Choose a harness, optional model, and 1–4
 parallel workers. Publication starts off; enabling it permits the coordinator's
-existing guarded review-feedback publication. Launching requires GitHub CLI
+existing guarded publication of feedback, fixes, and CI actions. Launching requires GitHub CLI
 authentication, Docker, the worker image, and the selected harness's model
 credentials, just like `run`. Each selected PR gets a fresh isolated session;
 wizard launches bypass reuse of earlier review evidence.

@@ -16,7 +16,7 @@
 <div id="prsfield" class="section"><label for="prinput">PR number or URL</label><textarea id="prinput" rows="3" style="display:block;width:100%;font:inherit;color:inherit;background:var(--panel)"></textarea><small>For a batch, separate PR numbers or URLs with spaces, commas, or new lines.</small></div>
 <div id="queryfield" class="section" hidden><label for="queryinput">GitHub search query</label><input id="queryinput" style="width:100%" placeholder="author:username label:bug"><small>Searches open PRs in this repository. Narrow queries exceeding 1,000 results.</small></div>
 <div class="detailsgrid section"><label>Reviewer <select id="launchharness"><option value="codex">Codex</option><option value="claude">Claude</option><option value="copilot">Copilot</option></select></label><label>Parallel workers <input id="launchconcurrency" type="number" min="1" max="4" value="2" style="width:70px"></label><label>Model (optional)<input id="launchmodel" placeholder="Harness default"></label></div>
-<label><input id="launchpublish" type="checkbox"> Allow guarded publication of review feedback</label>
+<label><input id="launchpublish" type="checkbox"> Allow guarded publication (feedback, fixes, and CI actions)</label>
 <p class="section muted">Uses your configured worker image and local model sign-in. Each PR runs in its own isolated session.</p>
 </fieldset>
 <fieldset id="previewstep" style="border:0;padding:0" hidden><p id="previewsettings" class="section"></p><p>Select the PRs to review:</p><div id="previewlist" style="max-height:40vh;overflow:auto"></div></fieldset>
