@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import uuid
 from pathlib import Path
 
@@ -107,12 +108,17 @@ def container_command(root, session_id, image):
         raise ValueError('Container bind source cannot contain a comma')
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
         raise ValueError('Worker image must be resolved to an immutable local sha256 ID')
+    uid, gid = 1000, 1000
+    if sys.platform.startswith('linux'):
+        uid, gid = os.getuid(), os.getgid()
+        if uid == 0 or gid == 0:
+            raise ValueError('Linux workers require a non-root coordinator UID and GID')
     args = ['docker', 'create', '--name', f'agentops-{session_id}',
             '--label', f'agentops.session={session_id}', '--read-only', '--cap-drop=ALL',
-            '--security-opt', 'no-new-privileges', '--user', '1000:1000',
+            '--security-opt', 'no-new-privileges', '--user', f'{uid}:{gid}',
             '--pids-limit', '512', '--memory', '8g', '--cpus', '2',
             '--tmpfs', '/tmp:rw,nosuid,exec,size=1g',
-            '--tmpfs', '/home/node:rw,nosuid,exec,uid=1000,gid=1000,size=1g',
+            '--tmpfs', f'/home/node:rw,nosuid,exec,uid={uid},gid={gid},size=1g',
             '--workdir', '/workspace', '--env', 'HOME=/home/node',
             '--env', 'GIT_CONFIG_NOSYSTEM=1', '--env', 'GIT_CONFIG_GLOBAL=/dev/null',
             '--env', 'GIT_CONFIG_COUNT=1', '--env', 'GIT_CONFIG_KEY_0=safe.directory',

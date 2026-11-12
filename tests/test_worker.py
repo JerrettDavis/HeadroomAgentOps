@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 from pathlib import Path
 
 from agentops.harness import Harness, validate_result, usage_from_events, response_from_events
@@ -17,6 +18,38 @@ def result():
 
 
 class WorkerTests(unittest.TestCase):
+    def test_linux_bind_mounts_and_home_use_coordinator_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('repo', 'input', 'output', 'auth'):
+                (root / name).mkdir()
+            with patch('sys.platform', 'linux'), \
+                    patch('os.getuid', return_value=1001, create=True), \
+                    patch('os.getgid', return_value=1002, create=True):
+                args = container_command(root, str(uuid.uuid4()), 'sha256:' + 'a' * 64)
+            self.assertEqual(args[args.index('--user') + 1], '1001:1002')
+            self.assertIn('/home/node:rw,nosuid,exec,uid=1001,gid=1002,size=1g', args)
+
+    def test_linux_root_identity_cannot_create_root_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ('repo', 'input', 'output', 'auth'):
+                (Path(directory) / name).mkdir()
+            for uid, gid in ((0, 0), (1001, 0)):
+                with self.subTest(uid=uid, gid=gid), patch('sys.platform', 'linux'), \
+                        patch('os.getuid', return_value=uid, create=True), \
+                        patch('os.getgid', return_value=gid, create=True):
+                    with self.assertRaisesRegex(ValueError, 'non-root'):
+                        container_command(directory, str(uuid.uuid4()), 'sha256:' + 'a' * 64)
+
+    def test_desktop_workers_keep_nonroot_image_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('repo', 'input', 'output', 'auth'):
+                (root / name).mkdir()
+            with patch('sys.platform', 'win32'):
+                args = container_command(root, str(uuid.uuid4()), 'sha256:' + 'a' * 64)
+            self.assertEqual(args[args.index('--user') + 1], '1000:1000')
+
     def test_missing_docker_object_is_recognized_independent_of_error_case(self):
         def runner(args, **kwargs):
             if args[:3] == ['docker', 'image', 'inspect']:

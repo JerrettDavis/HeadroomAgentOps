@@ -1,5 +1,9 @@
 # Execution and publication boundaries
 
+On Linux, run the coordinator as a non-root user with a non-root primary group.
+Workers map that UID/GID so private bind-mounted job files remain writable
+without granting world access. Docker Desktop retains the image's UID/GID 1000.
+
 The coordinator retains GitHub credentials and owns every external write. Workers run as a nonroot user in disposable Linux containers with a read-only root, no capabilities, no-new-privileges, resource limits and an intrinsic time budget. Workers receive only their checkout, inputs, output directory and selected model authentication. They receive no host home, primary checkout, shared Git metadata, publisher credentials or Docker socket.
 
 Model authentication remains accessible to the selected harness inside the container. Network access is available for inference and ordinary dependency retrieval. Treat PR content as untrusted; container isolation does not make arbitrary code trustworthy. Workflow and installer execution requires source review; unknown provenance remains a hold.

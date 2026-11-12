@@ -12,8 +12,20 @@ jobs:
   qualify:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      release_environment: ${{ steps.settings.outputs.environment }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Read central release settings
+        id: settings
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          name = json.load(open('.github/repository.json'))['release_environment']
+          assert re.fullmatch(r'[A-Za-z0-9_.-]+', name), 'Invalid release environment'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('environment=' + name, file=output)
+          PY
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
@@ -50,7 +62,7 @@ jobs:
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: qualify
-    environment: release
+    environment: ${{ needs.qualify.outputs.release_environment }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
