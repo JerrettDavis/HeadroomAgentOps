@@ -16,6 +16,12 @@ triggers off pauses observation; changes detected after resuming can be reviewed
 A pending event remains available while its trigger is disabled. Closed PRs are
 removed on the next complete inventory. Incomplete inventories never dispatch work.
 
+Scheduling inventories verify membership, heads, draft status, targets, authors,
+and head repositories. Unrelated comment/CI timestamp changes do not invalidate
+queue selection. Preview and launch revalidate the selected PRs directly, so new
+arrivals elsewhere cannot repeatedly cancel an already selected batch. Workers
+still collect fresh detailed discussion and CI evidence before reviewing or publishing.
+
 Reviews use the server's configured harness, model, publication setting, author
 exclusions, and worker concurrency. Automatic batches wait for coordinators launched
 by this dashboard to finish. The shared ledger enforces worker capacity and avoids

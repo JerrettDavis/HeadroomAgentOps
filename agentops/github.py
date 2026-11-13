@@ -23,7 +23,8 @@ QUEUE = '''query AgentOpsQueue($owner:String!,$name:String!,$cursor:String,$size
 QUEUE_IDENTITIES = '''query AgentOpsQueueIdentities($owner:String!,$name:String!,
  $cursor:String,$size:Int!) { repository(owner:$owner,name:$name) {
  pullRequests(first:$size,after:$cursor,states:OPEN,orderBy:{field:CREATED_AT,direction:ASC}) {
- nodes {number headRefOid updatedAt} totalCount pageInfo {hasNextPage endCursor} } } }'''
+ nodes {number headRefOid updatedAt isDraft baseRefName headRefName
+ author {login} headRepository {nameWithOwner}} totalCount pageInfo {hasNextPage endCursor} } } }'''
 THREADS = '''query AgentOpsThreads($owner:String!,$name:String!,$number:Int!,
  $cursor:String,$size:Int!) { repository(owner:$owner,name:$name) {
  pullRequest(number:$number) { reviewThreads(first:$size,after:$cursor) {
@@ -180,7 +181,11 @@ class GitHub:
                 'review_decision': raw.get('reviewDecision'), 'mergeable': raw['mergeable'],
                 'merge_state': raw['mergeStateStatus']}
 
-    def snapshot(self):
+    def snapshot(self, queue_only=False, numbers=None):
+        if numbers is not None:
+            if not queue_only:
+                raise ValueError('Selected inventory is only for queue scheduling')
+            return self._selected_snapshot(numbers)
         before = self.main_sha()
         counts = set()
         def fetch(cursor):
@@ -201,12 +206,51 @@ class GitHub:
         confirmed = self._connection(identities)
         initial = {(p['number'], p['head_sha'], p['updated_at']) for p in prs}
         final = {(p['number'], p['headRefOid'], p['updatedAt']) for p in confirmed}
+        if queue_only:
+            # Queue selection does not consume discussion/CI metadata as review proof.
+            # Those are collected and bound to each head independently by the worker.
+            # A comment on an unrelated PR must not starve all automatic reviews.
+            initial = {(p['number'], p['head_sha'], p['draft'], p['base_ref'],
+                        p['head_ref'], p['head_repo'], p['author']) for p in prs}
+            final = {(p['number'], p['headRefOid'], p['isDraft'], p['baseRefName'],
+                      p['headRefName'], (p.get('headRepository') or {}).get('nameWithOwner'),
+                      (p.get('author') or {}).get('login', 'ghost')) for p in confirmed}
         if counts != {len(prs)} or len(confirmed) != len(prs) or initial != final:
             raise ValueError('Queue changed or was incomplete between inventory passes; collect again')
         after = self.main_sha()
         if before != after:
             raise ValueError('upstream main changed during inventory; collect a fresh snapshot')
         return {'repo': self.repo, 'main_sha': before, 'prs': prs, 'complete': True,
+                'collected_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+
+    def _selected_snapshot(self, numbers):
+        """Revalidate selected PRs without depending on unrelated queue arrivals."""
+        numbers = sorted(set(numbers))
+        if not numbers or any(type(n) is not int or n <= 0 for n in numbers):
+            raise ValueError('Select positive PR numbers')
+        before = self.main_sha()
+        prs = []
+        fields = ('state number title body url author {login} headRefOid baseRefOid baseRefName '
+                  'headRefName isDraft updatedAt reviewDecision mergeable mergeStateStatus '
+                  'headRepository {nameWithOwner}')
+        for start in range(0, len(numbers), self.page_size):
+            batch = numbers[start:start + self.page_size]
+            selection = ' '.join(f'pr{n}:pullRequest(number:{n}){{{fields}}}' for n in batch)
+            query = ('query AgentOpsSelection($owner:String!,$name:String!){'
+                     'repository(owner:$owner,name:$name){' + selection + '}}')
+            data = self.graphql(query, {'owner': self.owner, 'name': self.name})['repository']
+            if set(data) != {f'pr{n}' for n in batch}:
+                raise ValueError('Incomplete selected PR inventory')
+            for n in batch:
+                raw = data[f'pr{n}']
+                if raw is not None and raw['state'] == 'OPEN':
+                    if raw['number'] != n:
+                        raise ValueError('Selected PR identity mismatch')
+                    prs.append(self._queue_pr(raw))
+        if self.main_sha() != before:
+            raise ValueError('upstream main changed during inventory; collect a fresh snapshot')
+        return {'repo': self.repo, 'main_sha': before, 'prs': prs, 'complete': True,
+                'selection': numbers,
                 'collected_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
     def pull(self, number):

@@ -109,7 +109,7 @@ class Launcher:
             numbers = None
         else:
             raise ValueError('Choose a review source')
-        snapshot = self.github.snapshot()
+        snapshot = self.github.snapshot(queue_only=True, numbers=numbers)
         if snapshot.get('complete') is not True or snapshot.get('repo') != config['repo']:
             raise ValueError('Complete repository inventory required')
         selected = [p for p in snapshot['prs'] if numbers is None or p['number'] in numbers]
@@ -147,7 +147,7 @@ class Launcher:
             expected = {p['number']: p['head_sha'] for p in receipt['prs']}
             if not set(selected) <= expected.keys():
                 raise ValueError('Selection is outside the preview')
-            snapshot = self.github.snapshot()
+            snapshot = self.github.snapshot(queue_only=True, numbers=selected)
             if snapshot.get('complete') is not True or snapshot.get('repo') != self.config['repo']:
                 raise ValueError('Complete repository inventory required')
             current = {p['number']: p['head_sha'] for p in snapshot['prs']}
@@ -189,11 +189,11 @@ class Launcher:
             if result['run_id'] in self.processes:
                 return {k: v for k, v in result.items() if k != 'error'}
             run = self.ledger.get_run(result['run_id'])
-            snapshot = self.github.snapshot()
+            jobs = self.ledger.jobs(result['run_id'])
+            snapshot = self.github.snapshot(queue_only=True, numbers=[j['number'] for j in jobs])
             if snapshot.get('complete') is not True or snapshot.get('repo') != self.config['repo']:
                 raise ValueError('Complete repository inventory required before retrying a launch')
             current = {p['number']: p for p in snapshot['prs']}
-            jobs = self.ledger.jobs(result['run_id'])
             if any(j['number'] not in current or current[j['number']]['head_sha'] != j['head_sha']
                    or (run['config'].get('non_draft_only') and current[j['number']].get('draft') is not False)
                    for j in jobs):

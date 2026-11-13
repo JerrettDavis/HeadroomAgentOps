@@ -174,7 +174,7 @@ class AutomationTests(unittest.TestCase):
             auto, launcher = self.setup_auto(directory)
             auto.configure({'new_prs': True})
             entered, release = threading.Event(), threading.Event()
-            def slow_snapshot():
+            def slow_snapshot(**kwargs):
                 entered.set()
                 release.wait(3)
                 return self.snapshot()

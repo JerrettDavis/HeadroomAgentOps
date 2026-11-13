@@ -60,7 +60,7 @@ class AutoReview:
                 self.save()
                 if result.get('error'):
                     raise ValueError(result['error'])
-            snapshot = self.launcher.github.snapshot()
+            snapshot = self.launcher.github.snapshot(queue_only=True)
             if snapshot.get('complete') is not True or snapshot.get('repo') != self.data['repo']:
                 raise ValueError('Complete repository inventory required for auto-review')
             seen = self.data['seen']

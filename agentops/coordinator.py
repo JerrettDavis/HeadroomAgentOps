@@ -45,7 +45,8 @@ class Coordinator:
         live_main = self.github.main_sha()
         if live_main != snapshot['main_sha']:
             self.ledger.invalidate(snapshot['repo'], live_main,
-                                   {p['number']: p['head_sha'] for p in snapshot['prs']})
+                                   {p['number']: p['head_sha'] for p in snapshot['prs']},
+                                   scope=snapshot.get('selection'))
             return self.ledger.status(run_id)
         active = self._restore_active(run_id)
         if not self.ledger.get_run(run_id)['stopped']:

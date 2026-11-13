@@ -124,6 +124,56 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(snapshot['main_sha'], SHA)
         self.assertTrue(snapshot['complete'])
 
+    def test_scheduling_inventory_ignores_discussion_timestamp_changes(self):
+        api = FakeAPI()
+        def comments_arrive(method, endpoint, payload=None):
+            data = copy.deepcopy(api(method, endpoint, payload))
+            if endpoint == 'graphql' and 'AgentOpsQueueIdentities' in payload['query']:
+                for pr in data['data']['repository']['pullRequests']['nodes']:
+                    pr['updatedAt'] = '2026-11-13T22:00:00Z'
+            return data
+        self.assertTrue(GitHub('o/r', comments_arrive).snapshot(queue_only=True)['complete'])
+        with self.assertRaises(ValueError):
+            GitHub('o/r', comments_arrive).snapshot()
+
+    def test_scheduling_inventory_still_rejects_head_draft_and_target_changes(self):
+        for field, changed in (('headRefOid', 'c'*40), ('isDraft', True),
+                               ('baseRefName', 'other'), ('headRefName', 'other')):
+            with self.subTest(field=field):
+                api = FakeAPI()
+                def mutate(method, endpoint, payload=None):
+                    data = copy.deepcopy(api(method, endpoint, payload))
+                    if endpoint == 'graphql' and 'AgentOpsQueueIdentities' in payload['query']:
+                        data['data']['repository']['pullRequests']['nodes'][0][field] = changed
+                    return data
+                with self.assertRaises(ValueError):
+                    GitHub('o/r', mutate).snapshot(queue_only=True)
+
+    def test_selected_inventory_does_not_read_unrelated_queue(self):
+        calls = []
+        def selected(method, endpoint, payload=None):
+            if endpoint == 'repos/o/r/commits/main':
+                return {'sha': SHA}
+            calls.append(payload)
+            self.assertIn('AgentOpsSelection', payload['query'])
+            self.assertIn('pullRequest(number:1)', payload['query'])
+            self.assertNotIn('pullRequests(', payload['query'])
+            return {'data': {'repository': {'pr1': {**raw_pr(1), 'state': 'OPEN'}}}}
+        snapshot = GitHub('o/r', selected).snapshot(queue_only=True, numbers=[1])
+        self.assertEqual([p['number'] for p in snapshot['prs']], [1])
+        self.assertTrue(snapshot['complete'])
+        self.assertEqual(len(calls), 1)
+
+    def test_selected_inventory_closed_pr_is_not_open_and_missing_alias_is_incomplete(self):
+        for row in ({'pr1': {**raw_pr(1), 'state': 'CLOSED'}}, {}):
+            def selected(method, endpoint, payload=None):
+                return {'sha': SHA} if endpoint != 'graphql' else {'data': {'repository': row}}
+            if row:
+                self.assertEqual(GitHub('o/r', selected).snapshot(queue_only=True, numbers=[1])['prs'], [])
+            else:
+                with self.assertRaises(ValueError):
+                    GitHub('o/r', selected).snapshot(queue_only=True, numbers=[1])
+
     def test_partial_queue_is_never_accepted_on_api_failure(self):
         api = FakeAPI()
         api.fail_second = True

@@ -277,10 +277,11 @@ class Ledger:
             db.execute('UPDATE jobs SET state=?,result=?,stale=? WHERE id=?',
                        (state, canonical(result), int(bool(row['stale']) or state == 'stale'), identity))
 
-    def invalidate(self, repo, main_sha, heads):
+    def invalidate(self, repo, main_sha, heads, scope=None):
         with self.connect(immediate=True) as db:
             for row in db.execute('SELECT id,number,head_sha,main_sha,state FROM jobs WHERE repo=?', (repo,)):
-                if row['main_sha'] != main_sha or heads.get(row['number']) != row['head_sha']:
+                observed = scope is None or row['number'] in scope
+                if row['main_sha'] != main_sha or (observed and heads.get(row['number']) != row['head_sha']):
                     state = 'running' if row['state'] == 'running' else 'stale'
                     db.execute('UPDATE jobs SET stale=1,state=? WHERE id=?', (state, row['id']))
 
