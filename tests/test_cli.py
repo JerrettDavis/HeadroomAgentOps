@@ -12,6 +12,31 @@ from agentops.ledger import Ledger
 
 
 class CLITests(unittest.TestCase):
+    def test_publication_is_enabled_by_default_with_explicit_opt_out(self):
+        from agentops.cli import load_config, parser
+        self.assertTrue(load_config(parser().parse_args(['run']))['publish'])
+        self.assertFalse(load_config(parser().parse_args(['run', '--no-publish']))['publish'])
+
+    def test_feedback_preview_needs_no_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('agentops.cli.Worker') as worker, contextlib.redirect_stdout(io.StringIO()) as output:
+                code = main(['--state', directory, 'feedback', '--no-publish'])
+            self.assertEqual(code, 0)
+            worker.assert_not_called()
+            self.assertEqual(json.loads(output.getvalue())['additional_model_sessions'], 0)
+
+    def test_status_details_round_trips_unicode_on_windows_console(self):
+        with tempfile.TemporaryDirectory() as directory:
+            raw = io.BytesIO()
+            console = io.TextIOWrapper(raw, encoding='cp1252')
+            jobs = [{'result': {'summary': 'before \u2192 after \u2705'}}]
+            with patch('agentops.cli.Ledger.status', return_value={}), \
+                    patch('agentops.cli.Ledger.jobs', return_value=jobs), contextlib.redirect_stdout(console):
+                code = main(['--state', directory, 'status', '--details'])
+            console.flush()
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(raw.getvalue().decode('cp1252')), {'jobs': jobs})
+
     def test_switching_saved_plan_harness_selects_its_auth_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             ledger = Ledger(Path(directory) / 'ledger.sqlite3')

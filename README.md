@@ -132,7 +132,7 @@ Run the complete current queue with safe maintainer publication enabled:
 .\headroom-review.ps1 run --harness codex --concurrency 2 --publish
 ```
 
-`./headroom-review.sh` exposes the same commands on POSIX systems. With no arguments, either launcher runs the full current queue using `agentops.toml`; publication defaults to disabled until explicitly configured. Models, harnesses, paths, budgets and concurrency are selectable without changing coordinator code.
+`./headroom-review.sh` exposes the same commands on POSIX systems. With no arguments, either launcher runs the full current queue using `agentops.toml`; guarded publication is enabled by default. Use `--no-publish` or `publish = false` for a local-only run. The dashboard honors the configured default and displays the choice before launch. Saved plans retain their original publication setting; use `run --plan RUN_ID --publish` to override a local-only plan. Models, harnesses, paths, budgets and concurrency are selectable without changing coordinator code.
 
 To inspect the work before starting agents, persist a plan first:
 
@@ -151,9 +151,51 @@ Unchanged questions and undelivered feedback remain recorded without repeating t
 
 ## Review and publication
 
+Recover saved feedback without repeating model work:
+
+```powershell
+.\headroom-review.ps1 feedback --run RUN_ID --no-publish
+.\headroom-review.ps1 feedback --run RUN_ID --publish
+```
+
+The first command previews eligible PRs; the second replays saved comments and review actions, including held reviews, through current revision, discussion, notice and approval checks. `--pr NUMBER` restricts recovery. This path starts no workers, preserves qualification holds, records receipts for duplicate suppression, and excludes code pushes and CI actions. A new shared notice must be reviewed before replay; a changed revision or discussion remains held. Existing `recover` handles completed workers interrupted by transport failures; `feedback` handles completed reviews whose publication was disabled.
+
+To finish missing public review determinations and select only PRs needing new reasoning:
+
+```powershell
+.\headroom-review.ps1 settle --output .agentops/settlement.json --publish
+.\headroom-review.ps1 run --plan RUN_ID_FROM_SETTLEMENT --publish
+```
+
+`settle` checks the complete live queue, reuses saved analysis for unchanged head/base/main and discussion,
+and posts a formal approval, changes request, or limited review explaining why approval remains withheld.
+All approval gates still apply. Existing matching maintainer determinations are retained. Only new PRs,
+changed revisions/discussions, new terminal CI failures, or unreviewed shared evidence enter the new plan.
+The report records every disposition, hold, error, and selected PR; settlement starts no model sessions.
+`COMMENTED` does not resolve GitHub's `REVIEW_REQUIRED` decision. Such PRs remain queued for approval
+qualification, while author-owned PRs are reported separately for independent maintainers.
+Use `settle --review-required --output FILE --publish` to focus on that live queue.
+`run --plan RUN_ID --qualification-pilot --publish` investigates one representative per shared workflow
+provenance blocker before spending on dependent PRs. Deferred jobs remain in the original plan, without
+duplicate jobs or worker sessions. `exclude_authors = ["YourLogin"]` excludes author PRs from plans and
+dashboard launches entirely. Reproduced regressions on bot PRs receive normal change-request reviews.
+Normal workers and cached-review publication also supply a formal determination when none was proposed.
+Follow-up workers receive the verified previous review so unchanged holds do not require repeating the
+same investigation; source coverage is reusable only for identical head, base, and main.
+
 Workers can prepare clean main integrations, mechanical conflict resolutions, small maintainer fixes, tests and documentation repairs. They must preserve contributor intent and leave semantic choices or missing proof as findings. The coordinator imports candidate Git bundles into a separate trusted bare repository before a leased fast-forward push. It never executes worker Git configuration on the host.
 
-Comments, reviews, fixes and CI actions are structured intents. Before publication, the coordinator rechecks the live PR head, current upstream main and discussion evidence. Approval additionally requires complete file/thread coverage, passing local evidence, expected hosted workflow coverage, successful actual checks or a recorded exact baseline exception, confirmed mergeability and source provenance review. Owner PRs require independent human approval. Explicit lifecycle, live-proof and policy holds remain recorded.
+Comments, reviews, fixes and CI actions are structured intents. Before publication, the coordinator rechecks the live PR head, current upstream main and discussion evidence. Approval requires complete file/thread coverage, passing local evidence, expected workflow coverage, confirmed mergeability and no unresolved blocking findings. Completed CI failures require a verified, exact-head/main/check-hash baseline exception. Superseded runs are distinguished from current failures; unrelated workflows are never conflated. Owner PRs require independent human approval. Explicit lifecycle, live-proof and policy holds remain recorded.
+
+Code-review approval does not merge a PR or authorize CI execution. For unchanged execution tooling, the coordinator can verify workflow inheritance from the PR merge base and bind a review-only baseline to the head, main, changed paths, and manifest. It also checks that approving the review cannot trigger a workflow. With that proof, inherited execution-provenance holds and queued/permission-waiting workflows do not prevent code-review approval; CI remains pending and branch protection still applies. Actual test failures are not ignored. Pushes and CI actions continue to require full execution provenance clearance.
+
+Run every current review-required contributor PR through four workers with a mandatory final review decision:
+
+```powershell
+.\headroom-review.ps1 run --review-required --require-decision --publish --concurrency 4
+```
+
+This selects the entire matching queue, not a pilot. `COMMENT` cannot satisfy a required final decision. Agents must propose a qualified `APPROVE` or concrete `REQUEST_CHANGES`; failed qualification remains explicitly unresolved. Retained results can be requalified mechanically with `requalify --run RUN_ID`, without another model review. Failed CI logs can be staged as head-bound evidence for a narrow follow-up, without exposing coordinator GitHub credentials. Baseline proposals remain scoped to their PR until centrally verified.
 
 Code pushes and CI execution require source review bound to the exact workflow manifest. Workflow/tooling changes in candidate bundles currently require additional provenance handling and are held. A new candidate head requires a fresh qualification; publishing a fix never approves it automatically. Readiness is evidence with stated limits, not a merge instruction.
 

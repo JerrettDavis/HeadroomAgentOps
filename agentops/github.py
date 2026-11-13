@@ -37,6 +37,15 @@ THREAD_COMMENTS = '''query AgentOpsThreadComments($id:ID!,$cursor:String) {
  pageInfo {hasNextPage endCursor} } } } }'''
 
 
+def read_pull(github,number):
+    for attempt in range(3):
+        try:
+            return github.pull(number)
+        except ValueError as exc:
+            if str(exc)!='PR changed during detail collection; retry with fresh evidence' or attempt==2:
+                raise
+
+
 class RejectedWrite(RuntimeError):
     """GitHub returned a definite rejection; no ambiguous write is assumed."""
 
@@ -51,7 +60,8 @@ def gh_transport(method, endpoint, payload=None):
                                    payload.get('query', '').lstrip().startswith('query '))
     for attempt in range(3):
         result = subprocess.run(command, input=json.dumps(payload) if payload is not None else None,
-                                capture_output=True, text=True, encoding='utf8', timeout=120)
+                                capture_output=True, text=True, encoding='utf8', timeout=120,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if (not result.returncode or not readonly or attempt == 2 or
                 not re.search(r'HTTP (500|502|503|504)|TLS handshake timeout', result.stderr, re.IGNORECASE)):
             break
@@ -91,6 +101,25 @@ class GitHub:
 
     def main_sha(self):
         return self.request('GET', f'repos/{self.repo}/commits/main')['sha']
+
+    def review_workflow_baseline(self,current,main_sha):
+        compare=self.request('GET',f'repos/{self.repo}/compare/{main_sha}...{current["head_sha"]}')
+        base=compare['merge_base_commit']['sha']
+        cache=getattr(self,'_review_baseline_cache',{})
+        def load(reference):
+            if reference not in cache:
+                data={**current,'head_sha':reference}
+                self.workflow_qualification(data)
+                events=any(re.search(r'\bpull_request_review(?:_comment)?\b',
+                           self._source_cache[m['git_blob_sha']]) for m in data['workflow_manifest'])
+                cache[reference]={'manifest_hash':data['workflow_manifest_hash'],'review_events':events}
+            return cache[reference]
+        baseline,main=load(base),load(main_sha)
+        self._review_baseline_cache=cache
+        head_events=any(re.search(r'\bpull_request_review(?:_comment)?\b',
+                        self._source_cache[m['git_blob_sha']]) for m in current.get('workflow_manifest',[]))
+        return {**baseline,'merge_base_sha':base,
+                'review_events':baseline['review_events'] or main['review_events'] or head_events}
 
     def graphql(self, query, variables):
         result = self.request('POST', 'graphql', {'query': query, 'variables': variables})

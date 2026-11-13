@@ -5,13 +5,15 @@ import datetime
 from .policy import gate, revision_gate, terminal_ci_refresh
 from .discussion import fingerprint
 from .model import canonical
+from .checks import effective_ci
 
 
 def failure_evidence(pr):
     """Ignore pending progress while retaining changed terminal failure evidence."""
     failures = []
-    for field in ('checks', 'workflows'):
-        for item in pr.get(field, []):
+    checks,workflows=effective_ci(pr)
+    for field,items in (('checks',checks),('workflows',workflows)):
+        for item in items:
             if item.get('status') == 'completed' and item.get('conclusion') not in ('success', 'neutral', 'skipped'):
                 failures.append((field, canonical(item)))
     seen = set()

@@ -12,6 +12,14 @@ from agentops.cli import DEFAULTS
 
 
 class LaunchTests(unittest.TestCase):
+    def test_publication_uses_configured_default_and_explicit_choice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, _ = self.setup_launcher(directory)
+            self.assertTrue(launcher.settings({})['publish'])
+            self.assertFalse(launcher.settings({'publish': False})['publish'])
+            launcher.config['publish'] = False
+            self.assertFalse(launcher.settings({})['publish'])
+
     def test_batch_parses_deduplicates_and_rejects_foreign_urls(self):
         self.assertEqual(parse_prs('1, #2 https://github.com/o/r/pull/1', 'o/r'), [1, 2])
         for text in ('', '0', '-1', 'https://github.com/other/r/pull/1', '1;echo bad'):
@@ -49,6 +57,17 @@ class LaunchTests(unittest.TestCase):
                     launcher.preview({'source': 'single', 'prs': '1', **settings})
             preview = launcher.preview({'source': 'single', 'prs': '1'})
             github.snapshot.return_value['prs'][0]['head_sha'] = 'c'*40
+            with patch('agentops.launch.subprocess.Popen') as spawn, self.assertRaises(ValueError):
+                launcher.launch({'preview_id': preview['preview_id'], 'selected': [1]})
+            spawn.assert_not_called()
+
+    def test_draft_conversion_after_preview_cannot_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, github = self.setup_launcher(directory)
+            for pr in github.snapshot.return_value['prs']:
+                pr['draft'] = False
+            preview = launcher.preview({'source': 'single', 'prs': '1', 'non_draft_only': True})
+            github.snapshot.return_value['prs'][0]['draft'] = True
             with patch('agentops.launch.subprocess.Popen') as spawn, self.assertRaises(ValueError):
                 launcher.launch({'preview_id': preview['preview_id'], 'selected': [1]})
             spawn.assert_not_called()
@@ -97,6 +116,14 @@ class LaunchTests(unittest.TestCase):
                     with self.assertRaises(HTTPError) as denied:
                         post('/api/preview', payload, origin, launch_token)
                     self.assertEqual(denied.exception.code, 403)
+                    with self.assertRaises(HTTPError) as denied_auto:
+                        post('/api/automation', {'new_prs': True}, origin, launch_token)
+                    self.assertEqual(denied_auto.exception.code, 403)
+                with post('/api/automation', {'new_prs': True, 'updated_prs': True,
+                                              'non_draft_only': True}) as response:
+                    self.assertTrue(json.load(response)['settings']['new_prs'])
+                with urlopen(base + '/api/launcher') as response:
+                    self.assertTrue(json.load(response)['automation']['settings']['updated_prs'])
                 with post('/api/preview', payload) as response:
                     preview = json.load(response)
                 with patch('agentops.launch.subprocess.Popen') as spawn:

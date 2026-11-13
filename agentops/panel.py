@@ -248,7 +248,8 @@ def archived_diff(root, identity, expected_head, repository):
             env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
             env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0')
             completed = subprocess.run(['git', '-c', f'core.hooksPath={os.devnull}', *args],
-                                       capture_output=True, timeout=60, check=True, env=env)
+                                       capture_output=True, timeout=60, check=True, env=env,
+                                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             return completed.stdout.decode('utf8', errors='replace')
         git('init', '--bare', str(repo))
         if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
@@ -269,6 +270,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
     from .launch import Launcher
     from .cli import DEFAULTS
     launcher = Launcher(path, config or DEFAULTS)
+    from .automation import AutoReview
+    automation = AutoReview(launcher)
     token = secrets.token_urlsafe(32)
 
     class Handler(BaseHTTPRequestHandler):
@@ -294,6 +297,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
                     result = launcher.preview(payload)
                 elif self.path == '/api/launch':
                     result = launcher.launch(payload)
+                elif self.path == '/api/automation':
+                    result = automation.configure(payload)
                 else:
                     self.send_error(404)
                     return
@@ -327,6 +332,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
                                    'harness': launcher.config['harness'],
                                    'model': launcher.config['model'],
                                    'concurrency': launcher.config['concurrency'],
+                                   'publish': launcher.config['publish'],
+                                   'automation': automation.status(),
                                    'processes': launcher.status()}).encode()
             elif url.path == '/api/report':
                 try:
@@ -362,14 +369,22 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
         import socket
         class IPv6Server(ThreadingHTTPServer):
             address_family = socket.AF_INET6
-        return IPv6Server((host, port), Handler)
-    return ThreadingHTTPServer((host, port), Handler)
+        server = IPv6Server((host, port), Handler)
+    else:
+        server = ThreadingHTTPServer((host, port), Handler)
+    server.automation = automation
+    return server
 
 
 def serve(path, host='127.0.0.1', port=8765, config=None):
     with make_server(path, host, port, config) as server:
+        import threading
+        watcher = threading.Thread(target=server.automation.run, daemon=True, name='auto-review')
+        watcher.start()
         print(f'Reviewer panel: http://{host}:{server.server_port} (Ctrl+C to stop)', flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        finally:
+            server.automation.stop.set()
