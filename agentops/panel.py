@@ -60,31 +60,7 @@ def check_status(pr):
     return 'passed' if all(c in ('success', 'skipped', 'neutral') for c in conclusions) else 'unknown'
 
 
-def report(path, run_id=None):
-    """Never initialize/migrate the ledger, contact GitHub, or inspect auth files."""
-    path = Path(path).resolve()
-    db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=5)
-    db.row_factory = sqlite3.Row
-    try:
-        db.execute('BEGIN')
-        runs = [dict(r) for r in db.execute(
-            'SELECT r.id,r.created,r.stopped,s.repo,(SELECT count(*) FROM jobs j WHERE j.run_id=r.id) AS total FROM runs r '
-            'JOIN snapshots s ON s.id=r.snapshot_id ORDER BY r.created DESC')]
-        if run_id and not any(r['id'] == run_id for r in runs):
-            raise KeyError('Unknown run')
-        selected = run_id or (runs[0]['id'] if runs else None)
-        jobs = [dict(r) for r in db.execute('SELECT * FROM jobs WHERE run_id=? ORDER BY created', (selected,))]
-        attempts = [dict(r) for r in db.execute(
-            'SELECT a.* FROM job_attempts a JOIN jobs j ON j.id=a.job_id WHERE j.run_id=?', (selected,))]
-        actions = [dict(r) for r in db.execute(
-            'SELECT a.* FROM actions a JOIN jobs j ON j.id=a.job_id WHERE j.run_id=? ORDER BY a.updated DESC', (selected,))]
-        snapshot_row = db.execute('SELECT s.data FROM snapshots s JOIN runs r ON r.snapshot_id=s.id WHERE r.id=?', (selected,)).fetchone()
-        snapshot = decode(snapshot_row[0]) if snapshot_row else {}
-        config_row = db.execute('SELECT config FROM runs WHERE id=?', (selected,)).fetchone()
-        config = decode(config_row[0]) if config_row else {}
-    finally:
-        db.close()
-    now = time.time()
+def usage_totals(jobs, attempts):
     usage = {'input_tokens': 0, 'output_tokens': 0, 'cached_input_tokens': 0,
              'cache_creation_input_tokens': 0, 'reasoning_output_tokens': 0,
              'cost_usd': 0, 'reported_attempts': 0, 'cost_reported_attempts': 0,
@@ -123,17 +99,55 @@ def report(path, run_id=None):
         if credits is not None:
             usage['ai_credits'] += credits
             usage['credits_reported_attempts'] += 1
+    return usage
+
+
+def report(path, run_id=None):
+    """Never initialize/migrate the ledger, contact GitHub, or inspect auth files."""
+    path = Path(path).resolve()
+    db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=5)
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute('BEGIN')
+        runs = [dict(r) for r in db.execute(
+            'SELECT r.id,r.created,r.stopped,s.repo,(SELECT count(*) FROM jobs j WHERE j.run_id=r.id) AS total FROM runs r '
+            'JOIN snapshots s ON s.id=r.snapshot_id ORDER BY r.created DESC')]
+        if run_id not in (None, 'all') and not any(r['id'] == run_id for r in runs):
+            raise KeyError('Unknown run')
+        selected = run_id or 'all'
+        all_view = selected == 'all'
+        run_inputs = {r['id']: {'snapshot': decode(r['data']), 'config': decode(r['config'])}
+                      for r in db.execute('SELECT r.id,r.config,s.data FROM runs r JOIN snapshots s ON s.id=r.snapshot_id')}
+        if all_view:
+            jobs = [dict(r) for r in db.execute('SELECT * FROM jobs ORDER BY created,id')]
+            attempts = [dict(r) for r in db.execute('SELECT * FROM job_attempts')]
+            actions = [dict(r) for r in db.execute('SELECT * FROM actions ORDER BY updated DESC')]
+        else:
+            jobs = [dict(r) for r in db.execute('SELECT * FROM jobs WHERE run_id=? ORDER BY created,id', (selected,))]
+            attempts = [dict(r) for r in db.execute(
+                'SELECT a.* FROM job_attempts a JOIN jobs j ON j.id=a.job_id WHERE j.run_id=?', (selected,))]
+            actions = [dict(r) for r in db.execute(
+                'SELECT a.* FROM actions a JOIN jobs j ON j.id=a.job_id WHERE j.run_id=? ORDER BY a.updated DESC', (selected,))]
+        snapshot = run_inputs.get(runs[0]['id'] if all_view and runs else selected, {}).get('snapshot', {})
+    finally:
+        db.close()
+    now = time.time()
+    usage = usage_totals(jobs, attempts)
     public_jobs = []
-    prs = {p['number']: p for p in snapshot.get('prs', [])}
+    prs = {identity: {p['number']: p for p in record['snapshot'].get('prs', [])}
+           for identity, record in run_inputs.items()}
+    run_created = {r['id']: r['created'] for r in runs}
     for job in jobs:
         result = {} if job['state'] in ('running', 'queued') else decode(job['result'])
         public_jobs.append({key: job[key] for key in
-                            ('id', 'number', 'repo', 'head_sha', 'main_sha', 'state', 'stale', 'attempt', 'created', 'heartbeat')})
+                            ('id', 'run_id', 'number', 'repo', 'head_sha', 'main_sha', 'state', 'stale', 'attempt', 'created', 'heartbeat')})
         public_jobs[-1].update(summary=result.get('summary', result.get('reason', result.get('error', ''))),
                                result=result, heartbeat_age_seconds=round(now - job['heartbeat']) if job['heartbeat'] else None)
-        pr = prs.get(job['number'], {})
+        pr = prs.get(job['run_id'], {}).get(job['number'], {})
+        config = run_inputs[job['run_id']]['config']
         handle = decode(job['handle'])
-        public_jobs[-1].update(pr=pr, session_id=handle.get('session_id'),
+        public_jobs[-1].update(pr=pr, run_created=run_created[job['run_id']],
+                               pr_key=f"{job['repo']}#{job['number']}", session_id=handle.get('session_id'),
                                agent=config.get('harness'), model=config.get('model'),
                                started_at=handle.get('started_at'),
                                execution=result.get('execution', {}))
@@ -155,15 +169,37 @@ def report(path, run_id=None):
         if data.get('kind') not in ('comment', 'review'):
             continue
         job = by_id[action['job_id']]
-        public_actions.append({'id': action['id'], 'number': job['number'], 'repo': job['repo'],
+        public_actions.append({'id': action['id'], 'job_id': job['id'], 'run_id': job['run_id'],
+                               'run_created': run_created[job['run_id']], 'head_sha': job['head_sha'],
+                               'number': job['number'], 'repo': job['repo'],
                                'state': action['state'], 'kind': data['kind'], 'body': data.get('body', ''),
                                'updated': action['updated'], 'url': receipt.get('html_url'),
                                'reasons': receipt.get('reasons', [])})
-    states = dict(Counter(j['state'] for j in jobs))
-    return {'generated': now, 'collected_at': snapshot.get('collected_at'), 'runs': runs, 'selected_run': selected, 'jobs': public_jobs,
-            'actions': public_actions, 'usage': usage, 'states': states, 'total': len(jobs),
-            'finished': sum(j['state'] not in ('queued', 'running') for j in jobs),
-            'stale': sum(bool(j['stale']) for j in jobs)}
+    job_count = len(public_jobs)
+    if all_view:
+        grouped = {}
+        for job in public_jobs:
+            grouped.setdefault((job['repo'], job['number']), []).append(job)
+        public_jobs = []
+        for records in grouped.values():
+            records.sort(key=lambda j: (j['created'], j['id']), reverse=True)
+            latest = {**records[0], 'sessions': records,
+                      'session_count': len({j['run_id'] for j in records})}
+            public_jobs.append(latest)
+        public_jobs.sort(key=lambda j: (j['created'], j['id']), reverse=True)
+    session_usage = [{'run_id': run['id'], 'created': run['created'], 'repo': run['repo'],
+                      'usage': usage_totals([j for j in jobs if j['run_id'] == run['id']],
+                          [a for a in attempts if by_id[a['job_id']]['run_id'] == run['id']])}
+                     for run in runs if all_view or run['id'] == selected]
+    states = dict(Counter(j['state'] for j in public_jobs))
+    return {'generated': now, 'collected_at': snapshot.get('collected_at'), 'runs': runs,
+            'selected_run': selected, 'jobs': public_jobs, 'job_count': job_count,
+            'actions': public_actions, 'usage': usage, 'session_usage': session_usage,
+            'active_prs': len({(j['repo'], j['number']) for j in jobs if j['state'] == 'running'}),
+            'states': states, 'total': len(public_jobs),
+            'finished': sum(j['state'] not in ('queued', 'running') for j in public_jobs),
+            'stale': sum(bool(j['stale']) for j in public_jobs)}
+
 
 
 def artifact(root, identity):
@@ -192,17 +228,33 @@ def saved_pr(root, session, raw=False):
         return {}
 
 
-def detail(path, job_id, diffs=False):
+def detail(path, job_id, diffs=False, all_sessions=False):
     path = Path(path).resolve()
     db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
     db.row_factory = sqlite3.Row
     try:
-        row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+        db.execute('BEGIN')
+        row = db.execute('SELECT j.*,r.created AS run_created FROM jobs j JOIN runs r ON r.id=j.run_id WHERE j.id=?',
+                         (job_id,)).fetchone()
+        if not row:
+            raise KeyError('Unknown job')
+        job = dict(row)
+        records = [dict(r) for r in db.execute(
+            'SELECT j.*,r.created AS run_created FROM jobs j JOIN runs r ON r.id=j.run_id '
+            'WHERE j.repo=? AND j.number=? ORDER BY j.created DESC,j.id DESC',
+            (job['repo'], job['number']))] if all_sessions else []
     finally:
         db.close()
-    if not row:
-        raise KeyError('Unknown job')
-    job = dict(row)
+    response = job_detail(path, job, diffs)
+    if all_sessions:
+        response['sessions'] = [dict(job_detail(path, record, diffs),
+            job_id=record['id'], run_id=record['run_id'], run_created=record['run_created'],
+            head_sha=record['head_sha'], state=record['state'], stale=record['stale'])
+            for record in records]
+    return response
+
+
+def job_detail(path, job, diffs):
     pr = saved_pr(path.parent, decode(job['handle']).get('session_id'))
     result = {} if job['state'] in ('running', 'queued') else decode(job['result'])
     response = {'pr': pr, 'result': result, 'files': pr.get('files', [])}
@@ -367,7 +419,7 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
             elif url.path == '/api/job':
                 try:
                     query = parse_qs(url.query)
-                    body = redact(json.dumps(detail(path, query.get('id', [''])[0], query.get('diffs') == ['1']), ensure_ascii=False)).encode()
+                    body = redact(json.dumps(detail(path, query.get('id', [''])[0], query.get('diffs') == ['1'], all_sessions=query.get('all') == ['1']), ensure_ascii=False)).encode()
                 except KeyError:
                     status, body = 404, b'{"error":"Unknown job"}'
                 except Exception:

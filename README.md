@@ -81,7 +81,17 @@ panel; full launch logs are retained under `<state>/launches/<run-id>.log`.
 Closing the browser or stopping the panel leaves launched coordinators running;
 use `headroom-review --state <state> stop <run-id>` to stop dispatch.
 
-Select a run to inspect its queue, captured CI/review/conflict indicators, PR details, agent sessions, attempt history, review evidence, and comment publication receipts. Search the queue, drill into a PR, and switch between Details, Diffs, Comments, Review evidence, and Sessions. Themes follow the system by default, with persistent light/dark overrides. The ledger refreshes every five seconds; pause Auto to hold the view.
+The session selector defaults to `<ALL>`. This combines all saved review runs,
+showing each repository/PR once with its newest record in the queue. Details,
+diffs, evidence, comments, active agents, and usage retain labels identifying
+their source session; historical diffs keep their original reviewed head.
+Token and cost totals include the underlying attempts, with a per-session
+breakdown. Choosing an individual session filters the view to that run.
+
+Search the queue and switch between Details, Diffs, Comments, Evidence, and
+Sessions. Themes follow the system by default, with persistent light/dark
+overrides. The ledger refreshes every five seconds; the live/paused icon controls
+dashboard refresh independently of automatic review scheduling.
 
 GitHub statuses come from saved inventory and review packets, not live GitHub polling. Session heartbeats describe coordinator activity, not a fresh worker process probe. Diffs show saved PR patches, exported candidate edits, and captured uncommitted edits. Binary or omitted patches are identified. Opening an exported candidate diff may fetch its missing base revision from GitHub into a disposable bare repository; Git is required for that view. No candidate code is checked out or executed.
 

@@ -9,7 +9,64 @@ test.beforeEach(async ({page, request, baseURL}) => {
     data: {new_prs: false, updated_prs: false, non_draft_only: true},
   });
   await page.goto('/');
+  await expect(page.locator('.markdown-body h1').first()).toHaveText('Summary');
+  const report = await (await request.get('/api/report')).json();
+  await page.locator('#run').selectOption(report.runs.find(r => r.total === 30).id);
+  await expect(page.locator('.job')).toHaveCount(30);
+  await expect(page.locator('#detail>.pr-description')).toBeVisible();
   await expect(page.locator('.markdown-body h1')).toHaveText('Summary');
+});
+
+test('ALL is default and combines a PR once with labeled content from both sessions', async ({page, request}) => {
+  await page.reload();
+  await expect(page.locator('#run')).toHaveValue('all');
+  await expect(page.locator('#captured')).toContainText('2 sessions');
+  await expect(page.locator('.job')).toHaveCount(31);
+  const row = page.locator('.job[data-pr-number="1"]');
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText('2 sessions');
+  await row.click();
+  await expect(page.locator('.session-record')).toHaveCount(2);
+  await expect(page.locator('#detail')).toContainText('Initial session review');
+  await expect(page.locator('#detail')).toContainText('Follow-up session review');
+  const report = await (await request.get('/api/report')).json();
+  const sourceRuns = report.jobs.find(j => j.number === 1).sessions.map(s => s.run_id);
+  expect(await page.locator('.session-record').evaluateAll(cards => cards.map(c => c.dataset.sourceRun))).toEqual(sourceRuns);
+  await page.locator('[data-tab=diff]').click();
+  await expect(page.locator('.diffline.addition')).toHaveText(['+followup', '+new']);
+  await page.locator('[data-tab=evidence]').click();
+  await expect(page.locator('#detail')).toContainText('Initial session evidence');
+  await expect(page.locator('#detail')).toContainText('Follow-up session evidence');
+  await page.locator('[data-tab=comments]').click();
+  await expect(page.locator('#detail .comment')).toHaveCount(2);
+  await expect(page.locator('#detail .session-tag')).toHaveCount(2);
+  await page.locator('[data-tab=sessions]').click();
+  await expect(page.locator('.session-record')).toHaveCount(2);
+  await expect(page.locator('#detail')).toContainText('Input 100');
+  await expect(page.locator('#detail')).toContainText('Input 200');
+  await expect(page.locator('#agents .session-tag')).toHaveCount(1);
+  await expect(page.locator('#usage')).toContainText('300');
+  await expect(page.locator('.usage-session')).toHaveCount(2);
+});
+
+test('choosing a specific session filters the aggregate back to that run', async ({page, request}) => {
+  const report = await (await request.get('/api/report')).json();
+  await page.locator('#run').selectOption(report.runs.find(r => r.total === 2).id);
+  await expect(page.locator('.job')).toHaveCount(2);
+  await page.locator('.job[data-pr-number="1"]').click();
+  await expect(page.locator('#detail')).toContainText('Follow-up session review');
+  await expect(page.locator('#detail')).not.toContainText('Initial session review');
+});
+
+test('session selection survives an in-flight background refresh', async ({page}) => {
+  await page.route('**/api/report**', async route => {
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await route.continue();
+  });
+  await page.evaluate(() => {refresh();});
+  await page.locator('#run').selectOption('all');
+  await expect(page.locator('#run')).toHaveValue('all');
+  await expect(page.locator('.job')).toHaveCount(31);
 });
 
 test('Markdown supports formatting and rejects active or app-spoofing HTML', async ({page}) => {
