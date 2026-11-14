@@ -39,8 +39,8 @@ Failed workers retry with an increasing delay, starting at five minutes and
 capped at one hour for the same head/main. Successful or active work takes
 precedence over old failures. Other PRs and new revisions remain eligible.
 
-Every five minutes the watcher rechecks up to four outstanding current-revision
-reviews. Attempt timestamps persist independently of success so malformed records
+Every five minutes a single background task rechecks up to four outstanding
+current-revision reviews without blocking inventory polling. Attempt timestamps persist independently of success so malformed records
 cannot starve later reviews. Existing gates can release qualified approvals when
 CI completes; new relevant evidence can queue a follow-up within the original
 attempt budget. Resumption revalidates every queued PR's head, main, draft status,

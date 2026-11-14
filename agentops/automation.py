@@ -22,6 +22,22 @@ class AutoReview:
             self.data.update(saved)
         self.error = None
         self.stop = threading.Event()
+        self.refresh_thread = None
+        self.data['reconciling'] = False
+
+    def refresh_reviews(self, snapshot, settings):
+        try:
+            refresh = self.launcher.refresh_reviews(snapshot, non_draft_only=settings['non_draft_only'])
+            with self.lock:
+                self.data['reconcile_errors'] = refresh.get('errors', [])
+                self.data['resume_runs'] = sorted(set(self.data.get('resume_runs', []) + refresh.get('resume_runs', [])))
+        except Exception as error:
+            with self.lock:
+                self.data['reconcile_errors'] = [{'number': None, 'error': str(error)}]
+        finally:
+            with self.lock:
+                self.data['reconciling'] = False
+                self.save()
 
     def save(self):
         with self.lock:
@@ -45,7 +61,7 @@ class AutoReview:
             return {**{key: value for key, value in self.data.items() if key != 'seen'},
                     'settings': dict(self.data['settings']), 'error': self.error}
 
-    def tick(self):
+    def tick(self, background=False):
         # Slow GitHub requests must not block dashboard status or toggle changes.
         with self.poll_lock:
             settings = self.data['settings']
@@ -63,17 +79,23 @@ class AutoReview:
             snapshot = self.launcher.github.snapshot(queue_only=True)
             if snapshot.get('complete') is not True or snapshot.get('repo') != self.data['repo']:
                 raise ValueError('Complete repository inventory required for auto-review')
-            if time.time() - (self.data.get('last_reconcile') or 0) >= 300:
-                try:
-                    refresh = self.launcher.refresh_reviews(snapshot, non_draft_only=settings['non_draft_only'])
-                    self.data['reconcile_errors'] = refresh.get('errors', [])
-                    self.data['resume_runs'] = sorted(set(self.data.get('resume_runs', []) + refresh.get('resume_runs', [])))
-                except (ValueError, RuntimeError, OSError) as error:
-                    self.data['reconcile_errors'] = [{'number': None, 'error': str(error)}]
+            if (time.time() - (self.data.get('last_reconcile') or 0) >= 300
+                    and not (self.refresh_thread and self.refresh_thread.is_alive())):
                 self.data['last_reconcile'] = time.time()
+                self.data['reconciling'] = True
+                if background:
+                    self.refresh_thread = threading.Thread(target=self.refresh_reviews,
+                        args=(snapshot, dict(settings)), daemon=True, name='review-reconciliation')
+                    self.refresh_thread.start()
+                else:
+                    self.refresh_reviews(snapshot, settings)
             if self.data.get('resume_runs') and (settings['new_prs'] or settings['updated_prs']):
-                self.data['resume_runs'] = self.launcher.resume_reviews(
-                    self.data['resume_runs'], non_draft_only=settings['non_draft_only'])
+                with self.lock:
+                    pending = list(self.data['resume_runs'])
+                    self.data['resume_runs'] = []
+                remaining = self.launcher.resume_reviews(pending, non_draft_only=settings['non_draft_only'])
+                with self.lock:
+                    self.data['resume_runs'] = sorted(set(self.data['resume_runs'] + remaining))
             seen = self.data['seen']
             # The ledger also covers a crash after launch but before this file was saved.
             jobs = [j for j in self.launcher.ledger.jobs() if j['repo'] == self.data['repo']
@@ -169,7 +191,7 @@ class AutoReview:
     def run(self):
         while not self.stop.is_set():
             try:
-                self.tick()
+                self.tick(background=True)
             except Exception as error:
                 self.error = str(error)
             self.stop.wait(60)

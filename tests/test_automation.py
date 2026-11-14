@@ -10,6 +10,29 @@ from agentops.cli import DEFAULTS
 
 
 class AutomationTests(unittest.TestCase):
+    def test_slow_reconciliation_does_not_block_inventory_or_new_pr_dispatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'new_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot()
+            entered, release = threading.Event(), threading.Event()
+            def slow_refresh(*args, **kwargs):
+                entered.set()
+                release.wait(5)
+                return {'errors': [], 'resume_runs': []}
+            launcher.refresh_reviews.side_effect = slow_refresh
+            try:
+                auto.tick(background=True)
+                self.assertTrue(entered.wait(1))
+                self.assertIsNotNone(auto.status()['last_poll'])
+                launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+                auto.tick(background=True)
+                launcher.launch.assert_called_once()
+                self.assertTrue(auto.status()['reconciling'])
+            finally:
+                release.set()
+                auto.refresh_thread.join(5)
+
     def test_review_refresh_is_periodic_and_runs_before_new_dispatch(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
