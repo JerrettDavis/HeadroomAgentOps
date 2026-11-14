@@ -68,6 +68,22 @@ test('mobile layout and options stay within the viewport', async ({page}) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test('narrow detail tabs stay on one line and keyboard selection scrolls into view', async ({page}) => {
+  await page.setViewportSize({width: 960, height: 600});
+  await page.locator('.tabs').evaluate(element => {element.style.width = '280px';});
+  const rows = await page.locator('[data-tab]').evaluateAll(tabs => new Set(tabs.map(t => Math.round(t.getBoundingClientRect().top))).size);
+  expect(rows).toBe(1);
+  await page.locator('[data-tab=details]').focus();
+  await page.keyboard.press('End');
+  await expect(page.locator('[data-tab=sessions]')).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(async () => page.locator('[data-tab=sessions]').evaluate(tab => {
+    const strip = tab.parentElement.getBoundingClientRect(), bounds = tab.getBoundingClientRect();
+    return bounds.left >= strip.left && bounds.right <= strip.right;
+  })).toBe(true);
+  await page.keyboard.press('Home');
+  await expect(page.locator('[data-tab=details]')).toHaveAttribute('aria-selected', 'true');
+});
+
 test('options persist and dismiss with Escape; tray hash opens popup', async ({page}) => {
   await page.locator('#automation-toggle').click();
   await page.locator('#autonew').check();
