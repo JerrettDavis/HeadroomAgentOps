@@ -266,6 +266,17 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise ValueError('The panel binds to loopback only')
     page = Path(__file__).with_name('panel.html')
+    assets = {
+        '/ui/marked.js': (page.parent / 'ui' / 'marked.js', 'text/javascript; charset=utf-8'),
+        '/ui/purify.js': (page.parent / 'ui' / 'purify.js', 'text/javascript; charset=utf-8'),
+        '/ui/markdown.js': (page.parent / 'ui' / 'markdown.js', 'text/javascript; charset=utf-8'),
+        '/brand/icon.svg': (page.parent / 'brand' / 'icon.svg', 'image/svg+xml'),
+        '/brand/icon.ico': (page.parent / 'brand' / 'icon.ico', 'image/x-icon'),
+        '/favicon.ico': (page.parent / 'brand' / 'icon.ico', 'image/x-icon'),
+        '/brand/icon-180.png': (page.parent / 'brand' / 'icon-180.png', 'image/png'),
+        '/brand/icon-192.png': (page.parent / 'brand' / 'icon-192.png', 'image/png'),
+        '/brand/icon-512.png': (page.parent / 'brand' / 'icon-512.png', 'image/png'),
+    }
     import secrets
     from .launch import Launcher
     from .cli import DEFAULTS
@@ -327,16 +338,9 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
             status, content_type = 200, 'application/json; charset=utf-8'
             if url.path == '/':
                 body, content_type = page.read_bytes(), 'text/html; charset=utf-8'
-            elif url.path in {'/ui/marked.js', '/ui/purify.js', '/ui/markdown.js'}:
-                body = (page.parent / 'ui' / url.path.rsplit('/', 1)[-1]).read_bytes()
-                content_type = 'text/javascript; charset=utf-8'
-            elif url.path in {
-                    '/brand/icon.svg', '/brand/icon.ico', '/brand/icon-180.png',
-                    '/brand/icon-192.png', '/brand/icon-512.png', '/favicon.ico'}:
-                name = 'icon.ico' if url.path == '/favicon.ico' else url.path.rsplit('/', 1)[-1]
-                body = (page.parent / 'brand' / name).read_bytes()
-                content_type = {'svg': 'image/svg+xml', 'ico': 'image/x-icon',
-                                'png': 'image/png'}[name.rsplit('.', 1)[-1]]
+            elif url.path in assets:
+                resource, content_type = assets[url.path]
+                body = resource.read_bytes()
             elif url.path == '/api/launcher':
                 body = json.dumps({'token': token, 'repo': launcher.config['repo'],
                                    'harness': launcher.config['harness'],

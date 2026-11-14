@@ -73,6 +73,11 @@ class PanelTests(unittest.TestCase):
                         self.assertGreater(len(response.read()), 100)
                 with self.assertRaises(HTTPError):
                     urlopen(base + '/ui/unknown.js')
+                for route in ('/ui/../panel.py', '/brand/../../agentops.toml',
+                              '/ui/%2e%2e/panel.py', '/brand/%2e%2e%2fpanel.py'):
+                    with self.assertRaises(HTTPError) as traversal:
+                        urlopen(base + route)
+                    self.assertEqual(traversal.exception.code, 404)
                 with urlopen(base + '/api/report') as response:
                     self.assertEqual(json.load(response)['total'], 1)
                     self.assertEqual(response.headers['Cache-Control'], 'no-store')
