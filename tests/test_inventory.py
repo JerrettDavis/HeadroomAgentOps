@@ -136,18 +136,21 @@ class InventoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             GitHub('o/r', comments_arrive).snapshot()
 
-    def test_scheduling_inventory_still_rejects_head_draft_and_target_changes(self):
-        for field, changed in (('headRefOid', 'c'*40), ('isDraft', True),
-                               ('baseRefName', 'other'), ('headRefName', 'other')):
-            with self.subTest(field=field):
-                api = FakeAPI()
-                def mutate(method, endpoint, payload=None):
-                    data = copy.deepcopy(api(method, endpoint, payload))
-                    if endpoint == 'graphql' and 'AgentOpsQueueIdentities' in payload['query']:
-                        data['data']['repository']['pullRequests']['nodes'][0][field] = changed
-                    return data
-                with self.assertRaises(ValueError):
-                    GitHub('o/r', mutate).snapshot(queue_only=True)
+    def test_discovery_does_not_wait_for_whole_repository_to_stop_changing(self):
+        api = FakeAPI()
+        def changing(method, endpoint, payload=None):
+            if endpoint == 'graphql' and 'AgentOpsQueueIdentities' in payload['query']:
+                raise AssertionError('Discovery must not require a quiet second pass')
+            return api(method, endpoint, payload)
+        snapshot = GitHub('o/r', changing).snapshot(queue_only=True)
+        self.assertEqual([p['number'] for p in snapshot['prs']], [1, 2])
+        self.assertEqual(snapshot['inventory_kind'], 'discovery')
+
+    def test_discovery_still_fails_on_incomplete_pagination(self):
+        api = FakeAPI()
+        api.fail_second = True
+        with self.assertRaises(RuntimeError):
+            GitHub('o/r', api).snapshot(queue_only=True)
 
     def test_selected_inventory_does_not_read_unrelated_queue(self):
         calls = []

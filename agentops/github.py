@@ -188,15 +188,27 @@ class GitHub:
             return self._selected_snapshot(numbers)
         before = self.main_sha()
         counts = set()
+        latest_count = None
         def fetch(cursor):
+            nonlocal latest_count
             data = self.graphql(QUEUE, {'owner': self.owner, 'name': self.name,
                                        'cursor': cursor, 'size': self.page_size})
             connection = data['repository']['pullRequests']
             counts.add(connection['totalCount'])
+            latest_count = connection['totalCount']
             return connection
         prs = [self._queue_pr(p) for p in self._connection(fetch)]
         if len({p['number'] for p in prs}) != len(prs):
             raise ValueError('Queue changed during pagination; duplicate PR')
+        if queue_only:
+            if latest_count != len(prs):
+                raise ValueError('Queue pagination was incomplete; collect again')
+            # Discovery is not review evidence. Requiring two globally identical
+            # inventories starves a busy repository; preview/launch independently
+            # bind the selected heads, draft status, target and current main.
+            return {'repo': self.repo, 'main_sha': self.main_sha(), 'prs': prs,
+                    'complete': True, 'inventory_kind': 'discovery',
+                    'collected_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
         def identities(cursor):
             data = self.graphql(QUEUE_IDENTITIES, {'owner': self.owner, 'name': self.name,
                 'cursor': cursor, 'size': self.page_size})
@@ -206,15 +218,6 @@ class GitHub:
         confirmed = self._connection(identities)
         initial = {(p['number'], p['head_sha'], p['updated_at']) for p in prs}
         final = {(p['number'], p['headRefOid'], p['updatedAt']) for p in confirmed}
-        if queue_only:
-            # Queue selection does not consume discussion/CI metadata as review proof.
-            # Those are collected and bound to each head independently by the worker.
-            # A comment on an unrelated PR must not starve all automatic reviews.
-            initial = {(p['number'], p['head_sha'], p['draft'], p['base_ref'],
-                        p['head_ref'], p['head_repo'], p['author']) for p in prs}
-            final = {(p['number'], p['headRefOid'], p['isDraft'], p['baseRefName'],
-                      p['headRefName'], (p.get('headRepository') or {}).get('nameWithOwner'),
-                      (p.get('author') or {}).get('login', 'ghost')) for p in confirmed}
         if counts != {len(prs)} or len(confirmed) != len(prs) or initial != final:
             raise ValueError('Queue changed or was incomplete between inventory passes; collect again')
         after = self.main_sha()

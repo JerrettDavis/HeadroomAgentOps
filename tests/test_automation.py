@@ -42,7 +42,7 @@ class AutomationTests(unittest.TestCase):
             launcher.github.snapshot.return_value['prs'][1]['draft'] = False
             auto.tick()
             self.assertEqual(launcher.preview.call_args.args[0], {
-                'source': 'batch', 'prs': '2', 'non_draft_only': True})
+                'source': 'batch', 'prs': '2', 'non_draft_only': True, 'require_decision': True})
             launcher.launch.assert_called_once()
             restarted = AutoReview(launcher)
             restarted.tick()
@@ -91,6 +91,46 @@ class AutomationTests(unittest.TestCase):
             launcher.ledger.jobs.return_value = [{'repo': 'o/r', 'number': 2, 'head_sha': 'a'}]
             AutoReview(launcher).tick()
             launcher.launch.assert_not_called()
+
+    def test_required_backlog_is_not_hidden_by_comment_only_or_stale_jobs(self):
+        for state in ('held', 'stale', 'needs_followup'):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                auto, launcher = self.setup_auto(directory)
+                auto.configure({'new_prs': True, 'updated_prs': True})
+                launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+                launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'REVIEW_REQUIRED'
+                launcher.ledger.jobs.return_value = [{'repo': 'o/r', 'number': 2, 'head_sha': 'a',
+                    'main_sha': 'm'*40, 'state': state, 'stale': state=='stale',
+                    'result': {'require_decision': False}}]
+                auto.tick()
+                launcher.launch.assert_called_once()
+                self.assertTrue(launcher.preview.call_args.args[0]['require_decision'])
+
+    def test_current_required_attempt_does_not_hot_loop_but_remains_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'new_prs': True, 'updated_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'REVIEW_REQUIRED'
+            launcher.ledger.jobs.return_value = [{'repo':'o/r','number':2,'head_sha':'a',
+                'main_sha':'m'*40,'state':'held','stale':False,
+                'result':{'require_decision':True, 'qualification_limits':['Proof missing']}}]
+            auto.tick()
+            auto.tick()
+            launcher.launch.assert_not_called()
+            self.assertEqual(auto.status()['attention'][0]['number'], 2)
+
+    def test_stopped_unstarted_mandatory_plan_is_not_a_completed_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot((2,'a',False,'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'REVIEW_REQUIRED'
+            launcher.ledger.jobs.return_value = [{'repo':'o/r','number':2,'head_sha':'a',
+                'main_sha':'m'*40,'state':'queued','run_id':'old','result':None}]
+            launcher.ledger.get_run.return_value = {'stopped':True,'config':{'require_decision':True}}
+            auto.tick()
+            launcher.launch.assert_called_once()
 
     def test_real_launcher_persists_plan_and_restart_does_not_spawn_twice(self):
         with tempfile.TemporaryDirectory() as directory:

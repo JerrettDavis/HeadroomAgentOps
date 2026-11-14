@@ -72,6 +72,15 @@ class LaunchTests(unittest.TestCase):
                 launcher.launch({'preview_id': preview['preview_id'], 'selected': [1]})
             spawn.assert_not_called()
 
+    def test_auto_decision_requirement_is_saved_on_plan_and_qualification_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, _ = self.setup_launcher(directory)
+            preview = launcher.preview({'source':'single','prs':'1','require_decision':True})
+            with patch('agentops.launch.subprocess.Popen'):
+                result = launcher.launch({'preview_id':preview['preview_id'],'selected':[1]})
+            self.assertTrue(launcher.ledger.get_run(result['run_id'])['config']['require_decision'])
+            self.assertEqual(launcher.ledger.jobs(result['run_id'])[0]['result']['review_task'], 'qualification')
+
     def test_query_is_scoped_and_rejects_truncation(self):
         with tempfile.TemporaryDirectory() as directory:
             launcher, github = self.setup_launcher(directory)

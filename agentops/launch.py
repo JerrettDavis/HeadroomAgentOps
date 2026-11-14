@@ -98,6 +98,9 @@ class Launcher:
         if type(request.get('non_draft_only', False)) is not bool:
             raise ValueError('Non-draft filter must be true or false')
         config['non_draft_only'] = request.get('non_draft_only', False)
+        if type(request.get('require_decision', False)) is not bool:
+            raise ValueError('Decision requirement must be true or false')
+        config['require_decision'] = request.get('require_decision', False)
         source = request.get('source')
         if source in ('single', 'batch'):
             numbers = set(parse_prs(request.get('prs', ''), config['repo']))
