@@ -55,6 +55,29 @@ test('provider allowance unknown state never renders as zero usage', async ({pag
   await expect(card).not.toContainText('0% used');
 });
 
+test('provider allowance controls are keyboard accessible and override remains visible', async ({page}) => {
+  const card = page.locator('.allowance-card[data-provider="codex"]');
+  await expect(card.locator('.allowance-state')).toHaveText('Available');
+  await card.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Tab');
+  await expect(card.getByRole('spinbutton')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(card.getByRole('spinbutton')).toHaveValue('79.9');
+  await page.keyboard.press('Tab');
+  await expect(card.getByRole('checkbox', {name: 'Enforce limits'})).toBeFocused();
+  await page.keyboard.press('Space');
+  await page.keyboard.press('Tab');
+  await expect(card.getByRole('button', {name: 'Save limits'})).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(card.locator('.allowance-state')).toHaveText('Enforcement off');
+  await page.reload();
+  await expect(card.locator('.allowance-state')).toHaveText('Enforcement off');
+  await card.locator('summary').click();
+  await expect(card.getByRole('spinbutton')).toHaveValue('79.9');
+  await expect(card.getByRole('checkbox')).not.toBeChecked();
+});
+
 test('saving one provider preserves another provider draft and live status updates', async ({page}) => {
   const codex = page.locator('.allowance-card[data-provider="codex"]');
   const claude = page.locator('.allowance-card[data-provider="claude"]');

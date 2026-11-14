@@ -50,8 +50,8 @@
 
 - [x] Add protected persistent allowance settings API and asynchronous status refresh; test origin/token protection, validation and responsive failures.
 - [x] Add branded allowance progress, reset/freshness, paused reasons, threshold and explicit override controls. Test boundary pause, unknown state, persistence, keyboard access and narrow viewports.
-- [ ] Run complete Python/UI/security checks and independent review, resolve findings, commit and push. Verify CI.
-- [ ] Deploy panel and ensure all running coordinators use the guard without interrupting models; verify real weekly usage and queue state. Leave service running.
+- [x] Run complete Python/UI/security checks and independent review, resolve findings, commit and push. Verify CI.
+- [x] Deploy panel and ensure all running coordinators use the guard without interrupting models; verify real weekly usage and queue state. Leave service running.
 
 ## Execution notes
 
@@ -60,3 +60,5 @@
 - Ruling: existing workers finish and publish during allowance/settings failures; queued work does not consume an attempt.
 - Independent review cleared account/source/staging binding, authentication policy, UI draft preservation and missing-window handling.
 - Verified real Codex CLI0.167.1 account-bound weekly reading at61%; Copilot exposes monthly25.6% and no weekly window; Claude has no host subscription credentials.
+
+- Completion evidence: implementation cd53202 passed all13 GitHub checks, including Docker e2e, six OS/Python combinations, UI, packaging and security. Live API threshold61 paused; restored80 allowed; panelPID129116. A fresh PR4877 worker was observed running under the deployed guard. Final metadata/test follow-up is verified separately before goal completion.
