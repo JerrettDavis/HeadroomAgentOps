@@ -49,6 +49,21 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(job['attempt'], 1)
         self.assertEqual(self.cleaned, [{'preserve_checkout': True}])
 
+    def test_detail_collection_race_recovers_without_another_model_session(self):
+        previous=self.ledger.job(self.job_id)['result']
+        self.ledger.reclassify(self.job_id,'failed',{**previous,
+            'error':'PR changed during detail collection; retry with fresh evidence'})
+        response=recover_job(self.ledger,self.github,self.evidence,self.worker,self.job_id)
+        self.assertEqual(response['additional_model_sessions'],0)
+        self.assertEqual(self.ledger.job(self.job_id)['attempt'],1)
+
+    def test_worker_baseline_proposal_is_scoped_to_its_pr(self):
+        self.output['notices']=[{'kind':'baseline','scope':'repository','body':'Observed inherited failure',
+                                'evidence':'retained paired logs'}]
+        recover_job(self.ledger,self.github,self.evidence,self.worker,self.job_id)
+        notices=self.ledger.notices('o/r',1)
+        self.assertEqual(notices[0]['numbers'],[1])
+
     def test_recovered_worker_own_suggestion_does_not_block_its_publication(self):
         self.output['notices'] = [{'kind': 'learning', 'body': 'A scoped observation.',
                                   'evidence': 'source:fixture', 'scope': 'pr'}]

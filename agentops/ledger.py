@@ -176,6 +176,55 @@ class Ledger:
                 (job['repo'], job['number'], job['head_sha'], job['main_sha'], job['id']))
             return [self._decode(row) for row in rows]
 
+    def context_review(self, job):
+        """Latest completed analysis, including an older head, for bounded follow-up context."""
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM jobs WHERE repo=? AND number=? AND id<>? "
+                             "AND state IN ('ready','held','reviewed','awaiting_ci','needs_followup') "
+                             "AND result IS NOT NULL ORDER BY created DESC,id DESC LIMIT 1",
+                             (job['repo'], job['number'], job['id'])).fetchone()
+            return self._decode(row) if row else None
+
+    def set_review_task(self, identity, task, shared_manifest=None,ci_evidence=None):
+        if task != 'qualification':
+            raise ValueError('Unknown bounded review task')
+        context = {'review_task':task}
+        if shared_manifest:
+            context['shared_provenance_hash'] = shared_manifest
+        if ci_evidence:
+            context['ci_failure_evidence']=ci_evidence
+        with self.connect(immediate=True) as db:
+            changed = db.execute("UPDATE jobs SET result=? WHERE id=? AND state='queued'",
+                                 (canonical(context), identity)).rowcount
+            if changed != 1:
+                raise ValueError('Review task can only be set before a job is claimed')
+
+    def split_pending_run(self, run_id, numbers):
+        source = self.get_run(run_id)
+        identity = uuid.uuid4().hex
+        wanted = set(numbers)
+        with self.connect(immediate=True) as db:
+            rows = db.execute('SELECT id,number,state FROM jobs WHERE run_id=?',(run_id,)).fetchall()
+            selected = [r for r in rows if r['number'] in wanted]
+            if len(selected) != len(wanted) or any(r['state'] != 'queued' for r in selected):
+                raise ValueError('Only unclaimed queued jobs can be partitioned')
+            db.execute('INSERT INTO runs(id,snapshot_id,config,created) VALUES(?,?,?,?)',
+                       (identity,source['snapshot_id'],canonical(source['config']),time.time()))
+            for row in selected:
+                db.execute('UPDATE jobs SET run_id=? WHERE id=?',(identity,row['id']))
+        return identity
+
+    def workflow_audit(self, repo, manifest):
+        with self.connect() as db:
+            row=db.execute('SELECT value FROM settings WHERE key=?',
+                           ('workflow-audit:'+repo+':'+manifest,)).fetchone()
+            return json.loads(row['value']) if row else None
+
+    def record_workflow_audit(self, repo, manifest, reference):
+        with self.connect(immediate=True) as db:
+            db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',
+                       ('workflow-audit:'+repo+':'+manifest,canonical(reference)))
+
     def attach_handle(self, identity, owner, handle):
         with self.connect() as db:
             count = db.execute("UPDATE jobs SET handle=?,heartbeat=? WHERE id=? AND owner=? "
@@ -228,10 +277,11 @@ class Ledger:
             db.execute('UPDATE jobs SET state=?,result=?,stale=? WHERE id=?',
                        (state, canonical(result), int(bool(row['stale']) or state == 'stale'), identity))
 
-    def invalidate(self, repo, main_sha, heads):
+    def invalidate(self, repo, main_sha, heads, scope=None):
         with self.connect(immediate=True) as db:
             for row in db.execute('SELECT id,number,head_sha,main_sha,state FROM jobs WHERE repo=?', (repo,)):
-                if row['main_sha'] != main_sha or heads.get(row['number']) != row['head_sha']:
+                observed = scope is None or row['number'] in scope
+                if row['main_sha'] != main_sha or (observed and heads.get(row['number']) != row['head_sha']):
                     state = 'running' if row['state'] == 'running' else 'stale'
                     db.execute('UPDATE jobs SET stale=1,state=? WHERE id=?', (state, row['id']))
 

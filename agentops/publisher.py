@@ -9,7 +9,8 @@ from .policy import gate, revision_gate
 from .redaction import redact
 from .discussion import fingerprint
 from .model import digest
-from .github import RejectedWrite
+from .github import RejectedWrite, read_pull
+from .disposition import determination, has_determination
 
 
 @contextlib.contextmanager
@@ -56,11 +57,11 @@ class Publisher:
                 return {'id': item.get('id'), 'url': item.get('html_url'), 'reconciled': True}
         return None
 
-    def publish(self, job, original, result):
+    def publish(self, job, original, result, current=None):
         with publication_lock(self.ledger.path):
-            return self._publish(job, original, result)
+            return self._publish(job, original, result, current)
 
-    def _publish(self, job, original, result):
+    def _publish(self, job, original, result, prepared_current=None):
         report = {'sent': [], 'held': [], 'own_discussion_entries': list(result.get('own_discussion_entries', []))}
         def remember(action, identity, receipt):
             if action['kind'] not in ('comment', 'review') or not receipt.get('id'):
@@ -70,11 +71,25 @@ class Publisher:
             if action['kind'] == 'review':
                 entry['state'] = {'APPROVE': 'APPROVED', 'COMMENT': 'COMMENTED',
                                   'REQUEST_CHANGES': 'CHANGES_REQUESTED'}[action['event']]
+                if action['event'] in ('APPROVE','REQUEST_CHANGES'):
+                    report['decision']=action['event']
             if entry not in report['own_discussion_entries']:
                 report['own_discussion_entries'].append(entry)
         actions = list(result.get('actions', []))
-        if not actions and result.get('findings'):
-            current = self.github.pull(job['number'])
+        if result.get('require_decision'):
+            actions=[a for a in actions if not (a['kind']=='review' and a.get('event')=='COMMENT')]
+        if result.get('determination_required') and not any(a['kind'] == 'review' for a in actions):
+            live = prepared_current or read_pull(self.github,job['number'])
+            actor = self.github.authenticated_user()['login']
+            if not has_determination(live, result, actor):
+                proposed=determination(result, live['author'], actor)
+                if not result.get('require_decision') or proposed['event']!='COMMENT':
+                    actions.append(proposed)
+        if result.get('require_decision') and not any(a['kind']=='review' and a.get('event') in
+                                                    ('APPROVE','REQUEST_CHANGES') for a in actions):
+            report['held'].append({'action':'final_review','reasons':['A qualified approval or concrete changes request is still required']})
+        if not actions and result.get('findings') and not result.get('require_decision'):
+            current = read_pull(self.github,job['number'])
             existing = '\n'.join(item.get('body') or '' for field in ('comments', 'reviews', 'review_comments')
                                   for item in current.get(field, []))
             normalize = lambda value: re.sub(r'\s+', ' ', redact(value)).strip().lower()
@@ -95,7 +110,15 @@ class Publisher:
                 report['sent'].append(recorded['receipt'])
                 remember(action, identity, recorded['receipt'])
                 continue
-            current = self.github.pull(job['number'])
+            current = prepared_current or read_pull(self.github,job['number'])
+            if prepared_current is not None:
+                # Prepared details are collected immediately by the mechanical settler.
+                # Recheck the mutable PR before consuming them for one write.
+                raw = self.github.request('GET', f'repos/{job["repo"]}/pulls/{job["number"]}')
+                if (raw['head']['sha'] != current['head_sha'] or
+                        raw['updated_at'] != current['updated_at']):
+                    current = read_pull(self.github,job['number'])
+                prepared_current = None
             raw_current = current
             checked_original = original
             if original.get('discussion_hash_version') == current.get('discussion_hash_version') == 2:
@@ -139,6 +162,8 @@ class Publisher:
                 event = action.get('event')
                 if event not in ('COMMENT', 'APPROVE', 'REQUEST_CHANGES'):
                     reasons.append('Unsupported review event')
+                if event == 'REQUEST_CHANGES' and current['author'].lower() in ('dependabot[bot]', 'dependabot'):
+                    reasons.append('Dependabot PRs require maintainer fixes, never change requests')
                 if event == 'APPROVE':
                     if (result.get('outcome') != 'ready' or
                             result.get('publication_qualification', result.get('outcome')) != 'ready'):
@@ -148,8 +173,6 @@ class Publisher:
                         reasons.append('Owner PR requires independent human review')
                     if current['author'].lower() == actor.lower():
                         reasons.append('Authenticated maintainer cannot approve their own PR')
-                if event == 'REQUEST_CHANGES' and current['author'].lower().startswith('dependabot'):
-                    reasons.append('Dependabot requires maintainer fixes rather than changes requests')
             if kind in ('push', 'ci'):
                 if (kind == 'ci' and 'reviewed_checks_hash' in result and
                         result['reviewed_checks_hash'] != current.get('checks_hash')):

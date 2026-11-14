@@ -20,15 +20,19 @@ from .process import command
 from .publisher import Publisher
 from .reconcile import reconcile_jobs
 from .recovery import recover_job
+from .feedback import replay_feedback
+from .settlement import settle_reviews
+from .qualification import qualification_pilot
+from .requalification import requalify_inherited_review
 from .worker import Worker, auth_plan, verify_copilot_scopes
 from .copilot_relay import NativeRelay, native_credential, retire_relays
 
 
 DEFAULTS = {'repo': 'headroomlabs-ai/headroom', 'state': '.agentops', 'concurrency': 2,
             'harness': 'codex', 'model': None, 'image': 'headroom-agentops-worker:local',
-            'auth_root': None, 'publish': False, 'timeout_seconds': 3600,
+            'auth_root': None, 'publish': True, 'timeout_seconds': 3600,
             'packet_budget': 24576, 'poll_seconds': 5, 'copilot_native': False,
-            'copilot_account': None, 'copilot_cli_root': None}
+            'copilot_account': None, 'copilot_cli_root': None, 'exclude_authors': []}
 
 
 def load_config(args):
@@ -38,12 +42,19 @@ def load_config(args):
         config.update(tomllib.loads(source.read_text(encoding='utf8')))
     elif args.config != 'agentops.toml':
         raise ValueError(f'Configuration does not exist: {source}')
+    configured_harness = config['harness']
     for key in DEFAULTS:
         value = getattr(args, key, None)
         if value is not None:
             config[key] = value
+    if (getattr(args, 'harness', None) and args.harness != configured_harness and
+            getattr(args, 'auth_root', None) is None):
+        config['auth_root'] = None
     if type(config['concurrency']) is not int or not 1 <= config['concurrency'] <= 4:
         raise ValueError('Concurrency must be an integer from 1 to 4')
+    if (not isinstance(config['exclude_authors'],list) or
+            not all(isinstance(a,str) and a.strip() for a in config['exclude_authors'])):
+        raise ValueError('Excluded authors must be a list of GitHub logins')
     if config['harness'] not in ('codex', 'claude', 'copilot'):
         raise ValueError('Unknown harness')
     for field in ('timeout_seconds', 'packet_budget', 'poll_seconds'):
@@ -70,16 +81,21 @@ def parser():
     inventory.add_argument('--snapshot', help='Import a complete saved inventory for replay')
     inventory.add_argument('--pr', type=int, action='append')
     inventory.add_argument('--limit', type=int)
+    inventory.add_argument('--review-required', action='store_true')
     run = sub.add_parser('run', help='Run a persisted plan, each PR in its own fresh container/session')
     run.add_argument('--plan', dest='run_id')
     run.add_argument('--pr', type=int, action='append')
     run.add_argument('--limit', type=int)
+    run.add_argument('--review-required', action='store_true')
+    run.add_argument('--require-decision', action=argparse.BooleanOptionalAction, default=None)
     run.add_argument('--harness', choices=['codex', 'claude', 'copilot'])
     run.add_argument('--model')
     run.add_argument('--auth-root')
     run.add_argument('--concurrency', type=int)
     run.add_argument('--publish', action=argparse.BooleanOptionalAction, default=None)
     run.add_argument('--force-fresh', action='store_true', help='Bypass verified prior review reuse')
+    run.add_argument('--qualification-pilot', action='store_true',
+                     help='Investigate each shared provenance blocker once before spending on dependent PRs')
     run.add_argument('--copilot-native', action=argparse.BooleanOptionalAction, default=None,
                      help='Use local Copilot sign-in through a model-only loopback relay')
     run.add_argument('--copilot-account')
@@ -95,6 +111,20 @@ def parser():
     recover = sub.add_parser('recover', help='Requalify completed output after a GitHub read failure; no new model session')
     recover.add_argument('job_id')
     recover.add_argument('--publish', action=argparse.BooleanOptionalAction, default=None)
+    feedback = sub.add_parser('feedback', help='Replay saved comments and reviews without new model sessions')
+    feedback.add_argument('--run', dest='run_id')
+    feedback.add_argument('--pr', type=int, action='append')
+    feedback.add_argument('--publish', action=argparse.BooleanOptionalAction, default=None)
+    requalify=sub.add_parser('requalify',help='Recheck sole inherited workflow review holds without new model sessions')
+    requalify.add_argument('--run',dest='run_id',required=True)
+    settle = sub.add_parser('settle', help='Post missing review determinations and plan only new or changed work')
+    settle.add_argument('--snapshot')
+    settle.add_argument('--output', required=True, help='Durable settlement report and launch-plan receipt')
+    settle.add_argument('--publish', action=argparse.BooleanOptionalAction, default=None)
+    settle.add_argument('--review-required', action='store_true',
+                        help='Reconcile only PRs whose live inventory review decision is REVIEW_REQUIRED')
+    settle.add_argument('--ack-notice', action='append', default=[],
+                        help='Exact shared-notice ID already assessed by the operator')
     reconcile = sub.add_parser('reconcile', help='Refresh queue, invalidate stale evidence and mechanically recheck CI')
     reconcile.add_argument('--run', dest='run_id')
     reconcile.add_argument('--retry-changed', action='store_true')
@@ -120,7 +150,9 @@ def make_plan(config, args, ledger, github, evidence):
     identity = ledger.save_snapshot(snapshot)
     evidence.put(snapshot)
     prior = {j['number']: j for j in ledger.jobs() if j['repo'] == snapshot['repo']}
-    selected = plan(snapshot, prior)
+    selected = plan(snapshot, prior, config.get('exclude_authors', []))
+    if getattr(args,'review_required',False):
+        selected=[p for p in selected if p.get('review_decision')=='REVIEW_REQUIRED']
     if args.pr:
         requested = set(args.pr)
         selected = [p for p in selected if p['number'] in requested]
@@ -132,9 +164,13 @@ def make_plan(config, args, ledger, github, evidence):
             raise ValueError('Plan limit must be positive')
         selected = selected[:args.limit]
     stored_config = {**config, 'repo': snapshot['repo']}
+    if getattr(args,'review_required',False) or getattr(args,'require_decision',False):
+        stored_config['require_decision']=True
     run_id = ledger.create_run(identity, stored_config)
     for pr in selected:
-        ledger.enqueue(run_id, pr, snapshot['main_sha'])
+        identity=ledger.enqueue(run_id, pr, snapshot['main_sha'])
+        if stored_config.get('require_decision'):
+            ledger.set_review_task(identity,'qualification')
     return {'run_id': run_id, 'snapshot_id': identity, 'main_sha': snapshot['main_sha'],
             'queue_total': len(snapshot['prs']), 'selected': [p['number'] for p in selected],
             'harness': config['harness'], 'concurrency': config['concurrency'], 'publish': config['publish']}
@@ -161,14 +197,19 @@ def main(argv=None):
             result = make_plan(config, args, ledger, github, evidence)
         elif args.command == 'run':
             if not args.run_id:
-                created = make_plan(config, argparse.Namespace(snapshot=None, pr=args.pr, limit=args.limit),
+                created = make_plan(config, argparse.Namespace(snapshot=None, pr=args.pr, limit=args.limit,
+                                    review_required=args.review_required,require_decision=args.require_decision),
                                     ledger, github, evidence)
                 args.run_id = created['run_id']
                 print(canonical({'event': 'planned', **created}), file=sys.stderr, flush=True)
+            if args.qualification_pilot:
+                selection = qualification_pilot(ledger,evidence,args.run_id)
+                args.run_id = selection['run_id']
+                print(canonical({'event':'qualification_pilot',**selection}),file=sys.stderr,flush=True)
             saved = ledger.get_run(args.run_id)['config']
             # Runtime selections are explicit overrides; other saved plan choices remain reproducible.
             effective = {**config, **saved, 'state': str(root)}
-            for key in ('harness', 'model', 'auth_root', 'concurrency', 'publish',
+            for key in ('harness', 'model', 'auth_root', 'concurrency', 'publish','require_decision',
                         'copilot_native', 'copilot_account', 'copilot_cli_root'):
                 value = getattr(args, key, None)
                 if value is not None:
@@ -205,13 +246,45 @@ def main(argv=None):
             coordinator = Coordinator(ledger, github, worker, evidence, config['concurrency'],
                 config['poll_seconds'], config['timeout_seconds'], config['packet_budget'], publisher,
                 emit=lambda event: print(canonical(event), file=sys.stderr, flush=True),
-                force_fresh=args.force_fresh)
+                force_fresh=args.force_fresh,require_decision=config.get('require_decision',False))
             result = coordinator.run(args.run_id)
         elif args.command == 'recover':
             worker = Worker(root / 'jobs', config['repo'], image=config['image'])
             publisher = Publisher(github, ledger, CandidatePublisher(root / 'publisher', github, evidence=evidence),
                                   CIHandler(github)) if config['publish'] else None
             result = recover_job(ledger, github, evidence, worker, args.job_id, publisher)
+        elif args.command == 'feedback':
+            publisher = Publisher(github, ledger) if config['publish'] else None
+            result = replay_feedback(ledger, evidence, publisher, config['repo'], args.run_id,
+                                     set(args.pr) if args.pr else None)
+        elif args.command == 'requalify':
+            github.page_size=100
+            publisher=Publisher(github,ledger)
+            reports=[]
+            for job in ledger.jobs(args.run_id):
+                if job['repo']!=config['repo']:
+                    continue
+                try:
+                    reports.append(requalify_inherited_review(ledger,github,evidence,publisher,job['id']))
+                except (OSError,RuntimeError,ValueError) as exc:
+                    reports.append({'number':job['number'],'approved':False,'reason':str(exc)})
+            result={'additional_model_sessions':0,'approved':[r for r in reports if r['approved']],
+                    'reports':reports}
+        elif args.command == 'settle':
+            snapshot = (json.loads(Path(args.snapshot).read_text(encoding='utf8'))
+                        if args.snapshot else github.snapshot())
+            github.page_size = 100
+            publisher = Publisher(github, ledger) if config['publish'] else None
+            output = Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            def checkpoint(event):
+                output.with_suffix('.progress.json').write_text(canonical(event), encoding='utf8')
+                print(canonical(event), file=sys.stderr, flush=True)
+            numbers = ({p['number'] for p in snapshot['prs'] if p.get('review_decision') == 'REVIEW_REQUIRED'}
+                       if args.review_required else None)
+            result = settle_reviews(ledger, github, evidence, snapshot, config, publisher,
+                                    checkpoint, args.ack_notice, numbers=numbers)
+            output.write_text(canonical(result), encoding='utf8')
         elif args.command == 'stop':
             ledger.stop(args.run_id)
             result = {'run_id': args.run_id, 'stopped': True,
@@ -257,9 +330,9 @@ def main(argv=None):
             except ValueError as exc:
                 checks['model_auth'] = {'ok': False, 'error': str(exc)}
             result = {'harness': config['harness'], 'checks': checks}
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(result))
             return 0 if all(c['ok'] for c in checks.values()) else 1
-        print(json.dumps(result, ensure_ascii=False))
+        print(json.dumps(result))
         return 0
     except (ValueError, RuntimeError, OSError, KeyError) as exc:
         print(f'agentops: {exc}', file=sys.stderr)

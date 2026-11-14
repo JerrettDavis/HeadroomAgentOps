@@ -10,3 +10,11 @@ dist/
 .worktrees/
 .serena/
 .remember/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+node_modules/
+test-results/
+playwright-report/

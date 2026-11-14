@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 32 32">
+  <title>Headroom AgentOps</title>
+  <rect width="32" height="32" rx="8" fill="#102733"/>
+  <rect x="8" y="6" width="16" height="3" rx="1.5" fill="#73e2c0"/>
+  <rect x="8" y="13" width="4" height="13" rx="1" fill="#f5f4ed"/>
+  <rect x="20" y="13" width="4" height="13" rx="1" fill="#f5f4ed"/>
+  <rect x="11" y="18" width="10" height="4" fill="#f5f4ed"/>
+</svg>

@@ -1,3 +1,5 @@
+![Headroom AgentOps — Room to ship.](agentops/brand/repository.svg)
+
 # Headroom AgentOps
 
 Script-driven PR review with mechanical inventory and a fresh agent session for each PR. A Python coordinator owns the queue, evidence, shared SQLite ledger and GitHub writes. Each agent gets its own disposable checkout in a Linux container. It reviews one PR and exits.
@@ -79,7 +81,17 @@ panel; full launch logs are retained under `<state>/launches/<run-id>.log`.
 Closing the browser or stopping the panel leaves launched coordinators running;
 use `headroom-review --state <state> stop <run-id>` to stop dispatch.
 
-Select a run to inspect its queue, captured CI/review/conflict indicators, PR details, agent sessions, attempt history, review evidence, and comment publication receipts. Search the queue, drill into a PR, and switch between Details, Diffs, Comments, Review evidence, and Sessions. Themes follow the system by default, with persistent light/dark overrides. The ledger refreshes every five seconds; pause Auto to hold the view.
+The session selector defaults to `<ALL>`. This combines all saved review runs,
+showing each repository/PR once with its newest record in the queue. Details,
+diffs, evidence, comments, active agents, and usage retain labels identifying
+their source session; historical diffs keep their original reviewed head.
+Token and cost totals include the underlying attempts, with a per-session
+breakdown. Choosing an individual session filters the view to that run.
+
+Search the queue and switch between Details, Diffs, Comments, Evidence, and
+Sessions. Themes follow the system by default, with persistent light/dark
+overrides. The ledger refreshes every five seconds; the live/paused icon controls
+dashboard refresh independently of automatic review scheduling.
 
 GitHub statuses come from saved inventory and review packets, not live GitHub polling. Session heartbeats describe coordinator activity, not a fresh worker process probe. Diffs show saved PR patches, exported candidate edits, and captured uncommitted edits. Binary or omitted patches are identified. Opening an exported candidate diff may fetch its missing base revision from GitHub into a disposable bare repository; Git is required for that view. No candidate code is checked out or executed.
 
@@ -132,7 +144,7 @@ Run the complete current queue with safe maintainer publication enabled:
 .\headroom-review.ps1 run --harness codex --concurrency 2 --publish
 ```
 
-`./headroom-review.sh` exposes the same commands on POSIX systems. With no arguments, either launcher runs the full current queue using `agentops.toml`; publication defaults to disabled until explicitly configured. Models, harnesses, paths, budgets and concurrency are selectable without changing coordinator code.
+`./headroom-review.sh` exposes the same commands on POSIX systems. With no arguments, either launcher runs the full current queue using `agentops.toml`; guarded publication is enabled by default. Use `--no-publish` or `publish = false` for a local-only run. The dashboard honors the configured default and displays the choice before launch. Saved plans retain their original publication setting; use `run --plan RUN_ID --publish` to override a local-only plan. Models, harnesses, paths, budgets and concurrency are selectable without changing coordinator code.
 
 To inspect the work before starting agents, persist a plan first:
 
@@ -151,9 +163,51 @@ Unchanged questions and undelivered feedback remain recorded without repeating t
 
 ## Review and publication
 
+Recover saved feedback without repeating model work:
+
+```powershell
+.\headroom-review.ps1 feedback --run RUN_ID --no-publish
+.\headroom-review.ps1 feedback --run RUN_ID --publish
+```
+
+The first command previews eligible PRs; the second replays saved comments and review actions, including held reviews, through current revision, discussion, notice and approval checks. `--pr NUMBER` restricts recovery. This path starts no workers, preserves qualification holds, records receipts for duplicate suppression, and excludes code pushes and CI actions. A new shared notice must be reviewed before replay; a changed revision or discussion remains held. Existing `recover` handles completed workers interrupted by transport failures; `feedback` handles completed reviews whose publication was disabled.
+
+To finish missing public review determinations and select only PRs needing new reasoning:
+
+```powershell
+.\headroom-review.ps1 settle --output .agentops/settlement.json --publish
+.\headroom-review.ps1 run --plan RUN_ID_FROM_SETTLEMENT --publish
+```
+
+`settle` checks the complete live queue, reuses saved analysis for unchanged head/base/main and discussion,
+and posts a formal approval, changes request, or limited review explaining why approval remains withheld.
+All approval gates still apply. Existing matching maintainer determinations are retained. Only new PRs,
+changed revisions/discussions, new terminal CI failures, or unreviewed shared evidence enter the new plan.
+The report records every disposition, hold, error, and selected PR; settlement starts no model sessions.
+`COMMENTED` does not resolve GitHub's `REVIEW_REQUIRED` decision. Such PRs remain queued for approval
+qualification, while author-owned PRs are reported separately for independent maintainers.
+Use `settle --review-required --output FILE --publish` to focus on that live queue.
+`run --plan RUN_ID --qualification-pilot --publish` investigates one representative per shared workflow
+provenance blocker before spending on dependent PRs. Deferred jobs remain in the original plan, without
+duplicate jobs or worker sessions. `exclude_authors = ["YourLogin"]` excludes author PRs from plans and
+dashboard launches entirely. Reproduced regressions on bot PRs receive normal change-request reviews.
+Normal workers and cached-review publication also supply a formal determination when none was proposed.
+Follow-up workers receive the verified previous review so unchanged holds do not require repeating the
+same investigation; source coverage is reusable only for identical head, base, and main.
+
 Workers can prepare clean main integrations, mechanical conflict resolutions, small maintainer fixes, tests and documentation repairs. They must preserve contributor intent and leave semantic choices or missing proof as findings. The coordinator imports candidate Git bundles into a separate trusted bare repository before a leased fast-forward push. It never executes worker Git configuration on the host.
 
-Comments, reviews, fixes and CI actions are structured intents. Before publication, the coordinator rechecks the live PR head, current upstream main and discussion evidence. Approval additionally requires complete file/thread coverage, passing local evidence, expected hosted workflow coverage, successful actual checks or a recorded exact baseline exception, confirmed mergeability and source provenance review. Owner PRs require independent human approval. Explicit lifecycle, live-proof and policy holds remain recorded.
+Comments, reviews, fixes and CI actions are structured intents. Before publication, the coordinator rechecks the live PR head, current upstream main and discussion evidence. Approval requires complete file/thread coverage, passing local evidence, expected workflow coverage, confirmed mergeability and no unresolved blocking findings. Completed CI failures require a verified, exact-head/main/check-hash baseline exception. Superseded runs are distinguished from current failures; unrelated workflows are never conflated. Owner PRs require independent human approval. Explicit lifecycle, live-proof and policy holds remain recorded.
+
+Code-review approval does not merge a PR or authorize CI execution. For unchanged execution tooling, the coordinator can verify workflow inheritance from the PR merge base and bind a review-only baseline to the head, main, changed paths, and manifest. It also checks that approving the review cannot trigger a workflow. With that proof, inherited execution-provenance holds and queued/permission-waiting workflows do not prevent code-review approval; CI remains pending and branch protection still applies. Actual test failures are not ignored. Pushes and CI actions continue to require full execution provenance clearance.
+
+Run every current review-required contributor PR through four workers with a mandatory final review decision:
+
+```powershell
+.\headroom-review.ps1 run --review-required --require-decision --publish --concurrency 4
+```
+
+This selects the entire matching queue, not a pilot. `COMMENT` cannot satisfy a required final decision. Agents must propose a qualified `APPROVE` or concrete `REQUEST_CHANGES`; failed qualification remains explicitly unresolved. Retained results can be requalified mechanically with `requalify --run RUN_ID`, without another model review. Failed CI logs can be staged as head-bound evidence for a narrow follow-up, without exposing coordinator GitHub credentials. Baseline proposals remain scoped to their PR until centrally verified.
 
 Code pushes and CI execution require source review bound to the exact workflow manifest. Workflow/tooling changes in candidate bundles currently require additional provenance handling and are held. A new candidate head requires a fresh qualification; publishing a fix never approves it automatically. Readiness is evidence with stated limits, not a merge instruction.
 
@@ -190,11 +244,22 @@ Candidate bundles are also retained as content-addressed evidence before cleanup
 
 ## Verification
 
+On Windows, running the panel also adds a notification-area icon. Double-click
+it to open the dashboard, or right-click for dashboard and automatic review controls.
+The icon disappears when the panel exits. Hiding the icon leaves reviews running.
+Windows may initially place it in the notification area's overflow menu.
+
 ```powershell
 uv run --frozen python -m unittest discover -s tests -v
 git diff --check
 ```
 
 The suite covers transactional claims, pagination failures, changed queue membership, evidence integrity, separate sessions, workflow applicability, publication races, duplicate feedback, candidate bundle import with an actual local leased push, source guards and cleanup. Qualification limits are recorded in [validation scope](docs/public-validation.md). Private operational records are not part of this distribution.
+
+Browser regression tests run against a temporary ledger and a separate loopback
+server, with no watcher, real workers or GitHub calls. From `tests/ui`, run
+`npm ci --ignore-scripts`, `npx playwright install chromium`, then `npm test`.
+CI runs the same tests for Markdown safety, controls, responsive layout and
+scroll behavior. The browser test dependencies are development tools only.
 
 Use `worker/smoke.py` for a small real harness contract check. It prints a container/session handle; observe that exact handle until terminal before cleanup. Never infer that a model finished from a state file alone.

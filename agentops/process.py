@@ -68,7 +68,8 @@ def command(args, cwd=None, env=None, timeout=120, input=None, combine_output=Fa
     completed = subprocess.run([str(a) for a in args], cwd=cwd, env=env, input=input,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT if combine_output else subprocess.PIPE,
-                               encoding='utf8', errors='replace', timeout=timeout)
+                               encoding='utf8', errors='replace', timeout=timeout,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if completed.returncode:
         detail = completed.stdout if combine_output else completed.stderr
         raise RuntimeError(f'{args[0]} failed ({completed.returncode}): {detail[-3000:]}')

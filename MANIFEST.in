@@ -13,6 +13,9 @@ include docs/public-validation.md
 include docs/security.md
 include scripts/configure_repository.py
 include scripts/prepare_release.py
+include scripts/build_brand.py
+include docs/brand-guidelines.md
+include docs/security-audit.md
 include worker/Dockerfile
 include worker/entry.py
 include worker/smoke.py

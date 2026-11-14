@@ -326,7 +326,8 @@ def native_credential(cli_root=None, account=None):
               'k.findCredentials("copilot-cli").then(x=>process.stdout.write(JSON.stringify(x)))'
               '.catch(()=>process.exit(3));')
     env = host_environment()
-    result = subprocess.run([node, '-e', script, str(root)], capture_output=True, text=True, env=env, timeout=30)
+    result = subprocess.run([node, '-e', script, str(root)], capture_output=True, text=True, env=env, timeout=30,
+                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode:
         raise ValueError('Native Copilot credential store is unavailable; use copilot login locally')
     entries = json.loads(result.stdout)
