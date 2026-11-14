@@ -178,7 +178,7 @@ def artifact(root, identity):
     return json.loads(raw)
 
 
-def saved_pr(root, session):
+def saved_pr(root, session, raw=False):
     if not isinstance(session, str) or not re.fullmatch('[a-f0-9-]{36}', session):
         return {}
     target = root / 'jobs' / session / 'input' / 'packet.json'
@@ -186,7 +186,7 @@ def saved_pr(root, session):
         if target.is_symlink() or not target.resolve().is_relative_to(root.resolve()):
             return {}
         packet = json.loads(target.read_text(encoding='utf8'))
-        record = artifact(root, packet['evidence']['sha256'])
+        record = artifact(root, packet['raw_api_evidence' if raw else 'evidence']['sha256'])
         return record.get('pr', record)
     except (OSError, ValueError, KeyError, TypeError):
         return {}
@@ -207,6 +207,14 @@ def detail(path, job_id, diffs=False):
     result = {} if job['state'] in ('running', 'queued') else decode(job['result'])
     response = {'pr': pr, 'result': result, 'files': pr.get('files', [])}
     if diffs:
+        # Compact model-facing evidence intentionally strips patches. The raw
+        # artifact retains them without refetching a potentially newer PR head.
+        raw = saved_pr(path.parent, decode(job['handle']).get('session_id'), raw=True)
+        if (raw.get('number') == job['number'] and raw.get('head_sha') == job['head_sha']
+                and isinstance(raw.get('files'), list)):
+            response['files'] = raw['files']
+        elif any('patch' not in file for file in response['files']):
+            response['pr_diff_error'] = 'Saved PR patch evidence is unavailable or does not match this reviewed commit.'
         try:
             response['candidate_diff'] = candidate_diff(path.parent, result, job)
         except Exception:

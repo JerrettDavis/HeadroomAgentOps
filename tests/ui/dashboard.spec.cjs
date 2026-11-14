@@ -1,11 +1,11 @@
 const {test, expect} = require('@playwright/test');
 
-test.beforeEach(async ({page, request}) => {
-  await page.route('**/*', route => new URL(route.request().url()).origin === 'http://127.0.0.1:18766'
+test.beforeEach(async ({page, request, baseURL}) => {
+  await page.route('**/*', route => new URL(route.request().url()).origin === baseURL
     ? route.continue() : route.abort());
   const info = await (await request.get('/api/launcher')).json();
   await request.post('/api/automation', {
-    headers: {'Origin': 'http://127.0.0.1:18766', 'X-Launch-Token': info.token},
+    headers: {'Origin': baseURL, 'X-Launch-Token': info.token},
     data: {new_prs: false, updated_prs: false, non_draft_only: true},
   });
   await page.goto('/');
@@ -40,6 +40,16 @@ test('Markdown supports formatting and rejects active or app-spoofing HTML', asy
     checks: [['checkbox', true, true], ['checkbox', true, false]],
     href: 'https://github.com/example/repository/blob/abc123/docs/guide.md',
     unsafe: 0, unsafeLinks: 0, executed: false});
+});
+
+test('PR diffs use recorded patches and omit an empty agent-edits section', async ({page}) => {
+  await page.locator('[data-tab=diff]').click();
+  await expect(page.locator('.filename')).toHaveText('source.py');
+  await expect(page.locator('.diffline.addition')).toHaveText('+new');
+  await expect(page.locator('.diffline.deletion')).toHaveText('-old');
+  await expect(page.locator('#detail')).not.toContainText('No text patch available');
+  await expect(page.locator('#detail')).not.toContainText('No agent edits exported');
+  await expect(page.locator('#detail h3', {hasText: 'Agent edits'})).toHaveCount(0);
 });
 
 for (const viewport of [{width: 1440, height: 900}, {width: 1024, height: 768}, {width: 960, height: 600}]) {
