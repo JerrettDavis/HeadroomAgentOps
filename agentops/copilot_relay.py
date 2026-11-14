@@ -17,6 +17,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .process import process_identity
+from .provider_usage import native_fingerprint
 
 
 HOST_ENVIRONMENT = {'PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE',
@@ -405,6 +406,7 @@ class NativeRelay:
 
     def descriptor(self):
         return {'directory': str(self.directory), 'model': self.config['model'],
+                'credential_fingerprint': self.ready.get('credential_fingerprint'),
                 'owner': {k: self.ready[k] for k in ('pid', 'started', 'host')}}
 
     def close(self, preserve=False):
@@ -434,7 +436,8 @@ def serve(directory, credential_loader=native_credential, relay_factory=Inferenc
         credential = credential_loader(config.get('cli_root'), config.get('account'))
         with relay_factory(credential, config['model']) as relay:
             atomic_json(directory / 'ready.json', {**process_identity(), 'port': relay.server.server_port,
-                        'model': relay.model, 'access_key': relay.access_key})
+                        'model': relay.model, 'access_key': relay.access_key,
+                        'credential_fingerprint': native_fingerprint(credential)})
             heartbeat = None
             last_seen = time.monotonic()
             while not (directory / 'stop').exists():

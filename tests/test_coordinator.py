@@ -1,6 +1,8 @@
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 
 from agentops.coordinator import Coordinator
@@ -63,6 +65,9 @@ class FakeWorker:
     def cleanup(self, handle):
         self.cleaned.add(handle['session_id'])
 
+    def discard_prepared(self, prepared):
+        self.cleaned.add(prepared['session_id'])
+
 
 class CoordinatorTests(unittest.TestCase):
     def setUp(self):
@@ -79,6 +84,114 @@ class CoordinatorTests(unittest.TestCase):
             self.db.enqueue(self.run, pr, snapshot['main_sha'])
         self.coordinator = Coordinator(self.db, self.github, self.worker, Evidence(self.root / 'evidence'),
                                        concurrency=2, poll_seconds=0)
+        self.coordinator.limits = SimpleNamespace(check=lambda: {'allowed': True})
+
+    def test_allowance_pause_preserves_queue_without_consuming_attempts_then_resumes(self):
+        permit = {'allowed': False, 'reason': 'Weekly stop point', 'state': 'paused'}
+        self.coordinator.limits = SimpleNamespace(check=lambda: dict(permit))
+        pauses = []
+        def reset(_):
+            if permit['allowed']:
+                return
+            self.assertEqual(len(self.worker.sessions), 0)
+            self.assertTrue(all(j['state'] == 'queued' and j['attempt'] == 0 for j in self.db.jobs(self.run)))
+            pauses.append(True)
+            permit['allowed'] = True
+        with patch('agentops.coordinator.time.sleep', side_effect=reset):
+            self.coordinator.run(self.run)
+        self.assertEqual(len(pauses), 1)
+        self.assertEqual(len(self.worker.sessions), 5)
+
+    def test_allowance_pause_keeps_active_worker_collection_and_publication_running(self):
+        permit = {'allowed': True, 'reason': 'Weekly stop point', 'state': 'paused'}
+        self.coordinator.limits = SimpleNamespace(check=lambda: dict(permit))
+        original_start = self.worker.start
+        def start(prepared):
+            result = original_start(prepared)
+            permit['allowed'] = False
+            return result
+        original_collect = self.worker.collect
+        def collect(handle, job):
+            self.assertFalse(permit['allowed'])
+            result = original_collect(handle, job)
+            permit['allowed'] = True
+            return result
+        self.worker.start, self.worker.collect = start, collect
+        published = []
+        def publish(job, original, result):
+            published.append(job['number'])
+            return {'own_discussion_entries': [], 'held': [], 'decision': True}
+        self.coordinator.publisher = SimpleNamespace(publish=publish)
+        self.coordinator.run(self.run)
+        self.assertEqual(len(self.worker.sessions), 5)
+        self.assertEqual(len(published), 5)
+        self.assertEqual(self.db.status(self.run)['states'], {'held': 5})
+
+    def test_allowance_store_error_does_not_abandon_an_active_worker(self):
+        healthy = [True]
+        events = []
+        def admission():
+            if not healthy[0]:
+                raise OSError('synthetic-secret error details')
+            return {'allowed': True}
+        self.coordinator.limits = SimpleNamespace(check=admission)
+        self.coordinator.emit = events.append
+        original_start, original_collect = self.worker.start, self.worker.collect
+        def start(prepared):
+            handle = original_start(prepared)
+            healthy[0] = False
+            return handle
+        def collect(handle, job):
+            self.assertFalse(healthy[0])
+            healthy[0] = True
+            return original_collect(handle, job)
+        self.worker.start, self.worker.collect = start, collect
+        self.coordinator.run(self.run)
+        self.assertEqual(self.db.status(self.run)['states'], {'held': 5})
+        self.assertNotIn('synthetic-secret', str(events))
+
+    def test_limit_changed_during_prepare_defers_and_cleans_staging_before_start(self):
+        permit = {'allowed': True, 'reason': 'Weekly stop point', 'state': 'paused'}
+        self.coordinator.limits = SimpleNamespace(check=lambda: dict(permit))
+        original_prepare = self.worker.prepare
+        def prepare(*args):
+            value = original_prepare(*args)
+            if len(self.worker.sessions) == 1:
+                permit['allowed'] = False
+            return value
+        self.worker.prepare = prepare
+        def reset(_):
+            if permit['allowed']:
+                return
+            self.assertEqual(self.worker.active, set())
+            self.assertEqual(len(self.worker.cleaned), 1)
+            self.assertTrue(all(j['state'] == 'queued' and j['attempt'] == 0 for j in self.db.jobs(self.run)))
+            permit['allowed'] = True
+        with patch('agentops.coordinator.time.sleep', side_effect=reset):
+            self.coordinator.run(self.run)
+        self.assertEqual(len(self.worker.sessions), 6)
+        self.assertTrue(all(j['attempt'] == 1 for j in self.db.jobs(self.run)))
+
+    def test_cleanup_error_during_allowance_pause_does_not_fail_or_consume_queued_work(self):
+        permit = {'allowed': True, 'reason': 'Weekly stop point'}
+        self.coordinator.limits = SimpleNamespace(check=lambda: dict(permit))
+        original_prepare = self.worker.prepare
+        def prepare(*args):
+            value = original_prepare(*args)
+            if len(self.worker.sessions) == 1:
+                permit['allowed'] = False
+            return value
+        self.worker.prepare = prepare
+        def broken(prepared):
+            raise OSError('cleanup failed')
+        self.worker.discard_prepared = broken
+        def reset(_):
+            if not permit['allowed']:
+                self.assertTrue(all(j['state'] == 'queued' and j['attempt'] == 0 for j in self.db.jobs(self.run)))
+                permit['allowed'] = True
+        with patch('agentops.coordinator.time.sleep', side_effect=reset):
+            self.coordinator.run(self.run)
+        self.assertEqual(self.db.status(self.run)['states'], {'held': 5})
 
     def test_five_prs_use_five_fresh_sessions_and_bounded_parallelism(self):
         status = self.coordinator.run(self.run)

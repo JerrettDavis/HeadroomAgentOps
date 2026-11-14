@@ -26,13 +26,15 @@ from .qualification import qualification_pilot
 from .requalification import requalify_inherited_review
 from .worker import Worker, auth_plan, verify_copilot_scopes
 from .copilot_relay import NativeRelay, native_credential, retire_relays
+from .allowances import Allowances
 
 
 DEFAULTS = {'repo': 'headroomlabs-ai/headroom', 'state': '.agentops', 'concurrency': 2,
             'harness': 'codex', 'model': None, 'image': 'headroom-agentops-worker:local',
             'auth_root': None, 'publish': True, 'timeout_seconds': 3600,
             'packet_budget': 24576, 'poll_seconds': 5, 'copilot_native': False,
-            'copilot_account': None, 'copilot_cli_root': None, 'exclude_authors': []}
+            'copilot_account': None, 'copilot_cli_root': None, 'exclude_authors': [],
+            'provider_limits': {}}
 
 
 def load_config(args):
@@ -57,6 +59,13 @@ def load_config(args):
         raise ValueError('Excluded authors must be a list of GitHub logins')
     if config['harness'] not in ('codex', 'claude', 'copilot'):
         raise ValueError('Unknown harness')
+    if not isinstance(config['provider_limits'], dict):
+        raise ValueError('Provider limits must be a table')
+    from .allowances import validate_settings
+    for provider, settings in config['provider_limits'].items():
+        if provider not in ('codex', 'claude', 'copilot'):
+            raise ValueError('Unknown allowance provider')
+        validate_settings(settings)
     for field in ('timeout_seconds', 'packet_budget', 'poll_seconds'):
         if type(config[field]) not in (int, float) or config[field] <= 0:
             raise ValueError(f'{field} must be positive')
@@ -234,6 +243,7 @@ def main(argv=None):
                         retire_relays(root / 'relays', args.run_id)
                 resources.callback(close_relay)
                 model_env, model_relay = relay.worker_environment(), relay.descriptor()
+                config['_native_credential_fingerprint'] = model_relay.get('credential_fingerprint')
             auth_env = os.environ if model_env is None else model_env
             scopes = (verify_copilot_scopes(auth_env) if config['harness'] == 'copilot' and
                       not auth_env.get('COPILOT_PROVIDER_BASE_URL') else None)
@@ -246,7 +256,8 @@ def main(argv=None):
             coordinator = Coordinator(ledger, github, worker, evidence, config['concurrency'],
                 config['poll_seconds'], config['timeout_seconds'], config['packet_budget'], publisher,
                 emit=lambda event: print(canonical(event), file=sys.stderr, flush=True),
-                force_fresh=args.force_fresh,require_decision=config.get('require_decision',False))
+                force_fresh=args.force_fresh,require_decision=config.get('require_decision',False),
+                limits=Allowances(ledger, config))
             result = coordinator.run(args.run_id)
         elif args.command == 'recover':
             worker = Worker(root / 'jobs', config['repo'], image=config['image'])

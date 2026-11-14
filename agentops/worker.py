@@ -10,6 +10,7 @@ import stat
 import sys
 import uuid
 from pathlib import Path
+from .provider_usage import staged_fingerprint
 
 from .harness import Harness, validate_result
 from .model import canonical
@@ -226,6 +227,9 @@ class Worker:
         auth = auth_plan(self.harness, os.environ if self.model_env is None else self.model_env,
                          self.auth_root, self.copilot_scopes)
         stage_model_auth(directory, auth)
+        auth_fingerprint = (self.model_relay.get('credential_fingerprint') if self.model_relay else
+            staged_fingerprint(self.harness,
+                {name: (directory / 'auth' / name).read_bytes() for name in auth['files']}, auth['env']))
         (directory / 'input' / 'packet.json').write_text(packet_text, encoding='utf8')
         packet_data = json.loads(packet_text)
         for key in ('evidence', 'context_evidence', 'raw_api_evidence'):
@@ -334,7 +338,7 @@ class Worker:
         )
         (directory / 'input' / 'assignment.json').write_text(canonical(assignment), encoding='utf8')
         return {'session_id': session_id, 'directory': str(directory), 'assignment': assignment,
-                'model_relay': self.model_relay}
+                'model_relay': self.model_relay, 'auth_fingerprint': auth_fingerprint}
 
     def start(self, prepared):
         image_id = self.runner(['docker', 'image', 'inspect', self.image, '--format', '{{.Id}}'])
@@ -417,6 +421,19 @@ class Worker:
         observation = self.observe(handle)
         if observation['state'] not in ('exited', 'missing'):
             raise ValueError('Cleanup requires a confirmed terminal owned container')
+        self._cleanup_files(directory, preserve_checkout)
+        if observation['state'] == 'exited':
+            self.runner(['docker', 'rm', handle['container']])
+
+    def discard_prepared(self, prepared):
+        """Discard filesystem staging before any container has been created."""
+        directory = safe_job_path(self.root, prepared['session_id'])
+        if Path(prepared['directory']).resolve() != directory:
+            raise ValueError('Cleanup target is outside the owned worker directory')
+        self._cleanup_files(directory, False)
+
+    @staticmethod
+    def _cleanup_files(directory, preserve_checkout):
         # The resolved absolute targets are checked before any recursive deletion.
         checkout = safe_job_path(directory, 'repo')
         if checkout.exists() and not preserve_checkout:
@@ -434,8 +451,6 @@ class Worker:
                 if source.is_dir():
                     raise ValueError('Unexpected directory in model auth staging')
                 source.unlink()
-        if observation['state'] == 'exited':
-            self.runner(['docker', 'rm', handle['container']])
 
     def diagnostics(self, handle):
         directory = safe_job_path(self.root, handle['session_id']) / 'output'

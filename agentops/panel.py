@@ -322,7 +322,7 @@ def archived_diff(root, identity, expected_head, repository):
         return git('-C', str(repo), 'diff', '--no-ext-diff', '--no-textconv', '--no-color', head, candidate)
 
 
-def make_server(path, host='127.0.0.1', port=8765, config=None):
+def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=None, usage_identity_reader=None):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise ValueError('The panel binds to loopback only')
     page = Path(__file__).with_name('panel.html')
@@ -343,6 +343,10 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
     launcher = Launcher(path, config or DEFAULTS)
     from .automation import AutoReview
     automation = AutoReview(launcher)
+    from .allowance_monitor import AllowanceMonitor
+    from .provider_usage import authentication_fingerprint, read_usage
+    allowances = AllowanceMonitor(path, launcher.config, reader=usage_reader or read_usage,
+                                  identity_reader=usage_identity_reader or authentication_fingerprint)
     token = secrets.token_urlsafe(32)
 
     class Handler(BaseHTTPRequestHandler):
@@ -370,6 +374,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
                     result = launcher.launch(payload)
                 elif self.path == '/api/automation':
                     result = automation.configure(payload)
+                elif self.path == '/api/allowances':
+                    result = allowances.configure(payload)
                 else:
                     self.send_error(404)
                     return
@@ -409,6 +415,11 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
                                    'publish': launcher.config['publish'],
                                    'automation': automation.status(),
                                    'processes': launcher.status()}).encode()
+            elif url.path == '/api/allowances':
+                try:
+                    body = json.dumps(allowances.status(refresh=True), allow_nan=False).encode()
+                except (sqlite3.Error, ValueError, OSError):
+                    status, body = 503, b'{"error":"Provider allowance status unavailable. New reviews wait while enforcement is enabled."}'
             elif url.path == '/api/report':
                 try:
                     body = redact(json.dumps(report(path, parse_qs(url.query).get('run', [None])[0]), ensure_ascii=False)).encode()

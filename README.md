@@ -93,6 +93,12 @@ Sessions. Themes follow the system by default, with persistent light/dark
 overrides. The ledger refreshes every five seconds; the live/paused icon controls
 dashboard refresh independently of automatic review scheduling.
 
+**Provider allowances** shows account usage and reset times. Each provider's
+**Review stop point** defaults to 80% used; it pauses new reviews while existing
+workers finish. Missing or stale weekly readings pause work while protection is
+enabled. See [provider allowance limits](docs/provider-limits.md) for settings,
+provider data availability, authentication and overrides.
+
 GitHub statuses come from saved inventory and review packets, not live GitHub polling. Session heartbeats describe coordinator activity, not a fresh worker process probe. Diffs show saved PR patches, exported candidate edits, and captured uncommitted edits. Binary or omitted patches are identified. Opening an exported candidate diff may fetch its missing base revision from GitHub into a disposable bare repository; Git is required for that view. No candidate code is checked out or executed.
 
 Usage totals include historical attempts in the selected run, without counting the current result twice. Codex, Claude, and Copilot metrics are normalized; Copilot AI credits remain separate from reported USD. Missing usage/cost stays unknown, and active metrics appear when the coordinator persists them. Reused evidence is counted separately. Cached/reasoning token categories can overlap input/output, so do not sum all displayed rows.

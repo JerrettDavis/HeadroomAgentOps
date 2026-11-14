@@ -21,12 +21,13 @@ from .requalification import requalify_inherited_review
 from .recovery import recover_job
 from .dispatch_recovery import recover_unstarted_jobs
 from .ci_evidence import collect_failed_ci
+from .allowances import Allowances
 
 
 class Coordinator:
     def __init__(self, ledger, github, worker, evidence, concurrency=2, poll_seconds=5,
                  timeout_seconds=3600, packet_budget=24576, publisher=None, emit=None, force_fresh=False,
-                 require_decision=False):
+                 require_decision=False, limits=None):
         if not 1 <= concurrency <= 4:
             raise ValueError('Concurrency must be 1–4')
         if timeout_seconds <= 0 or packet_budget <= 0:
@@ -37,10 +38,21 @@ class Coordinator:
         self.publisher, self.emit = publisher, emit or (lambda event: None)
         self.force_fresh = force_fresh
         self.require_decision = require_decision
+        self.limits = limits
         self.owner = canonical({**process_identity(), 'nonce': uuid.uuid4().hex})
+
+    @staticmethod
+    def _admission(limits):
+        try:
+            return limits.check()
+        except Exception:
+            # A settings/storage failure pauses dispatch, not observation and
+            # publication of workers that are already running.
+            return {'allowed': False, 'reason': 'Provider allowance unavailable; new reviews wait.'}
 
     def run(self, run_id):
         run = self.ledger.get_run(run_id)
+        limits = self.limits or Allowances(self.ledger, run['config'])
         snapshot = self.ledger.get_snapshot(run['snapshot_id'])
         live_main = self.github.main_sha()
         if live_main != snapshot['main_sha']:
@@ -57,6 +69,10 @@ class Coordinator:
             stopped = bool(self.ledger.get_run(run_id)['stopped'])
             if not stopped:
                 while len(active) < self.concurrency:
+                    admission = self._admission(limits)
+                    if not admission['allowed']:
+                        self.emit({'event': 'allowance_paused', 'reason': admission['reason']})
+                        break
                     job = self.ledger.claim(self.owner, self.concurrency, run_id)
                     if not job:
                         break
@@ -105,6 +121,21 @@ class Coordinator:
                                     pass
                         prepared = self.worker.prepare({**job, 'timeout_seconds': self.timeout_seconds}, original,
                                                        self.evidence, text)
+                        # Preparation may fetch a repository for minutes. Re-read
+                        # shared settings/usage at the actual dispatch boundary.
+                        admission = self._admission(limits)
+                        if (admission['allowed'] and hasattr(limits, 'matches_prepared') and
+                                not limits.matches_prepared(prepared, admission)):
+                            admission = {'allowed': False, 'reason': 'Provider account changed during preparation; staging will be retried.'}
+                        if not admission['allowed']:
+                            try:
+                                self.worker.discard_prepared(prepared)
+                            except Exception:
+                                self.emit({'event': 'staging_cleanup_required', 'number': job['number'],
+                                           'session': prepared['session_id']})
+                            self.ledger.defer(job['id'], self.owner)
+                            self.emit({'event': 'allowance_paused', 'reason': admission['reason']})
+                            break
                         pending = {'container': 'agentops-' + prepared['session_id'],
                                    'session_id': prepared['session_id'], 'directory': prepared['directory'],
                                    'started_at': time.time()}

@@ -159,6 +159,15 @@ class Ledger:
                 value[field] = json.loads(value[field])
         return value
 
+    def defer(self, identity, owner):
+        """Return an owned, never-started claim without consuming a model attempt."""
+        with self.connect(immediate=True) as db:
+            changed = db.execute("UPDATE jobs SET state='queued',owner=NULL,heartbeat=NULL,"
+                                 "attempt=attempt-1 WHERE id=? AND state='running' AND owner=? "
+                                 "AND handle IS NULL AND attempt>0", (identity, owner)).rowcount
+            if changed != 1:
+                raise ValueError('Only an owned unstarted claim can be deferred')
+
     def job(self, identity):
         with self.connect() as db:
             return self._decode(db.execute('SELECT * FROM jobs WHERE id=?', (identity,)).fetchone())

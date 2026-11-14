@@ -8,6 +8,10 @@ test.beforeEach(async ({page, request, baseURL}) => {
     headers: {'Origin': baseURL, 'X-Launch-Token': info.token},
     data: {new_prs: false, updated_prs: false, non_draft_only: true},
   });
+  await request.post('/api/allowances', {
+    headers: {'Origin': baseURL, 'X-Launch-Token': info.token},
+    data: {provider: 'codex', stop_percent: 80, enabled: true},
+  });
   await page.goto('/');
   await expect(page.locator('.markdown-body h1').first()).toHaveText('Summary');
   const report = await (await request.get('/api/report')).json();
@@ -15,6 +19,65 @@ test.beforeEach(async ({page, request, baseURL}) => {
   await expect(page.locator('.job')).toHaveCount(30);
   await expect(page.locator('#detail>.pr-description')).toBeVisible();
   await expect(page.locator('.markdown-body h1')).toHaveText('Summary');
+});
+
+test('provider allowance shows real windows and persists an inclusive stop point', async ({page}) => {
+  const card = page.locator('.allowance-card[data-provider="codex"]');
+  await expect(card).toContainText('60% used');
+  await expect(card).toContainText('Weekly');
+  await expect(card.getByRole('progressbar')).toHaveAttribute('value', '60');
+  await card.getByText('Review stop point', {exact: true}).click();
+  const threshold = card.getByRole('spinbutton', {name: 'Codex stop percentage'});
+  await threshold.fill('60');
+  await page.evaluate(() => refreshAllowances());
+  await expect(threshold).toHaveValue('60');
+  await card.getByRole('button', {name: 'Save limits'}).click();
+  await expect(card.locator('.allowance-state')).toHaveText('Paused');
+  await page.reload();
+  await expect(card.locator('.allowance-state')).toHaveText('Paused');
+  await card.getByText('Review stop point', {exact: true}).click();
+  await expect(card.getByRole('spinbutton')).toHaveValue('60');
+  await card.getByRole('spinbutton').fill('80');
+  await card.getByRole('button', {name: 'Save limits'}).click();
+  await expect(card.locator('.allowance-state')).toHaveText('Available');
+});
+
+test('provider allowance unknown state never renders as zero usage', async ({page, request}) => {
+  const status = await (await request.get('/api/allowances')).json();
+  Object.assign(status.providers[0], {state: 'unavailable', allowed: false, fresh: false,
+    windows: [], observed_at: null, reason: 'Account allowance unavailable; new reviews wait.'});
+  await page.route('**/api/allowances', route => route.fulfill({json: status}));
+  await page.reload();
+  const card = page.locator('.allowance-card[data-provider="codex"]');
+  await expect(card.locator('.allowance-state')).toHaveText('Unavailable');
+  await expect(card).toContainText('new reviews wait');
+  await expect(card.getByRole('progressbar')).toHaveCount(0);
+  await expect(card).not.toContainText('0% used');
+});
+
+test('saving one provider preserves another provider draft and live status updates', async ({page}) => {
+  const codex = page.locator('.allowance-card[data-provider="codex"]');
+  const claude = page.locator('.allowance-card[data-provider="claude"]');
+  await expect(claude).toBeVisible();
+  await codex.locator('summary').click();
+  await claude.locator('summary').click();
+  await claude.getByRole('spinbutton').fill('55');
+  await codex.getByRole('spinbutton').fill('70');
+  await codex.getByRole('button', {name: 'Save limits'}).click();
+  await expect(page.locator('#allowance-message')).toContainText('Review limits saved.');
+  await expect(claude.getByRole('spinbutton')).toHaveValue('55');
+  await expect(claude.locator('details')).toHaveAttribute('open', '');
+  await page.locator('#search').focus();
+  await page.route('**/api/allowances', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    Object.assign(body.providers.find(p => p.provider === 'claude'), {state: 'paused', allowed: false});
+    await route.fulfill({json: body});
+  });
+  await page.evaluate(() => refreshAllowances());
+  await expect(claude.getByRole('spinbutton')).toHaveValue('55');
+  await expect(claude.locator('.allowance-state')).toHaveText('Paused');
+  await expect(codex.locator('.allowance-state')).toHaveText('Available');
 });
 
 test('ALL is default and combines a PR once with labeled content from both sessions', async ({page, request}) => {

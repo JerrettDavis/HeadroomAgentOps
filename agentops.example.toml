@@ -13,3 +13,9 @@ publish = true
 timeout_seconds = 3600
 packet_budget = 24576
 poll_seconds = 5
+
+# Shared dashboard settings override these initial provider stop points.
+# New reviews wait at this percentage used; running reviews finish normally.
+[provider_limits.codex]
+stop_percent = 80
+enabled = true

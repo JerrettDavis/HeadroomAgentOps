@@ -5,6 +5,7 @@ import sys
 import tempfile
 import json
 import argparse
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -69,6 +70,12 @@ with tempfile.TemporaryDirectory(prefix='agentops-ui-') as directory:
             db.execute('INSERT INTO actions VALUES(?,?,?,?,?,?)',
                        (f'action-{index}', job, json.dumps({'kind': 'review', 'body': label + ' comment'}), 'sent', '{}', index + 1))
         db.execute('UPDATE jobs SET state=?,attempt=1 WHERE id=?', ('running', next_jobs[1]))
-    config = {**DEFAULTS, 'repo': 'example/repository', 'state': directory, 'publish': False}
-    with make_server(path, port=args.port, config=config) as server:
+    config = {**DEFAULTS, 'repo': 'example/repository', 'state': directory,
+              'auth_root': directory, 'publish': False, 'provider_limits': {'claude': {'stop_percent': 80}}}
+    def synthetic_usage(config):
+        return {'source': 'Synthetic account usage', 'blocked': False, 'auth_fingerprint': 'synthetic', 'windows': [{
+            'id': 'weekly', 'label': 'Weekly', 'period': 'weekly', 'window_minutes': 10080,
+            'used_percent': 60, 'resets_at': time.time() + 86400}]}
+    with make_server(path, port=args.port, config=config, usage_reader=synthetic_usage,
+                     usage_identity_reader=lambda config: 'synthetic') as server:
         server.serve_forever()

@@ -11,6 +11,7 @@ include .github/labels.json
 include docs/automation.md
 include docs/public-validation.md
 include docs/security.md
+include docs/provider-limits.md
 include scripts/configure_repository.py
 include scripts/prepare_release.py
 include scripts/build_brand.py
