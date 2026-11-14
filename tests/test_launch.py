@@ -12,6 +12,89 @@ from agentops.cli import DEFAULTS
 
 
 class LaunchTests(unittest.TestCase):
+    def test_resume_withdraws_queued_jobs_superseded_by_a_newer_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, github = self.setup_launcher(directory)
+            snapshot = github.snapshot.return_value
+            for pr in snapshot['prs']:
+                pr['draft'] = False
+            sid = launcher.ledger.save_snapshot(snapshot)
+            config = {**launcher.config, 'require_decision': True}
+            old_run = launcher.ledger.create_run(sid, config)
+            old_jobs = [launcher.ledger.enqueue(old_run, pr, snapshot['main_sha']) for pr in snapshot['prs']]
+            new_run = launcher.ledger.create_run(sid, config)
+            launcher.ledger.enqueue(new_run, snapshot['prs'][0], snapshot['main_sha'])
+            with patch('agentops.launch.subprocess.Popen') as spawn:
+                spawn.return_value.poll.return_value = None
+                launcher.resume_reviews([old_run])
+                spawn.assert_called_once()
+            self.assertEqual(launcher.ledger.job(old_jobs[0])['state'], 'cancelled')
+            self.assertEqual(launcher.ledger.job(old_jobs[1])['state'], 'queued')
+
+    def test_unreconcilable_reviews_do_not_starve_later_candidates_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, github = self.setup_launcher(directory)
+            snapshot = github.snapshot.return_value
+            snapshot['prs'] = [{'number': n, 'head_sha': str(n)*40, 'draft': False, 'author': 'user'} for n in range(1, 6)]
+            run = launcher.ledger.create_run(launcher.ledger.save_snapshot(snapshot),
+                                            {**launcher.config, 'require_decision': True})
+            jobs = []
+            for pr in snapshot['prs']:
+                job = launcher.ledger.enqueue(run, pr, snapshot['main_sha'])
+                jobs.append(job)
+                with launcher.ledger.connect() as db:
+                    db.execute('UPDATE jobs SET state=?,result=? WHERE id=?',
+                               ('held', json.dumps({'outcome': 'awaiting_ci'}), job))
+            with patch('agentops.launch.reconcile_jobs', return_value={'errors': [], 'queued': [], 'ready': []}) as reconcile, patch('agentops.launch.requalify_inherited_review', return_value={'approved': False}):
+                launcher.refresh_reviews(snapshot)
+                self.assertEqual(reconcile.call_args.kwargs['job_ids'], set(jobs[:4]))
+                restarted = Launcher(launcher.root / 'ledger.sqlite3', launcher.config, github)
+                restarted.refresh_reviews(snapshot)
+                self.assertIn(jobs[4], reconcile.call_args.kwargs['job_ids'])
+
+    def test_resume_revalidates_every_queued_pr_after_spawn_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, github = self.setup_launcher(directory)
+            snapshot = github.snapshot.return_value
+            for pr in snapshot['prs']:
+                pr['draft'] = False
+            run = launcher.ledger.create_run(launcher.ledger.save_snapshot(snapshot),
+                {**launcher.config, 'require_decision': True, 'non_draft_only': True})
+            jobs = [launcher.ledger.enqueue(run, pr, snapshot['main_sha']) for pr in snapshot['prs']]
+            with patch('agentops.launch.subprocess.Popen', side_effect=OSError('unavailable')):
+                self.assertEqual(launcher.resume_reviews([run]), [run])
+            snapshot['prs'][0]['draft'] = True
+            with patch('agentops.launch.subprocess.Popen') as spawn:
+                spawn.return_value.poll.return_value = None
+                self.assertEqual(launcher.resume_reviews([run]), [])
+                spawn.assert_called_once()
+            self.assertEqual(launcher.ledger.job(jobs[0])['state'], 'cancelled')
+            self.assertEqual(launcher.ledger.job(jobs[1])['state'], 'queued')
+
+    def test_idle_refresh_targets_only_latest_matching_publishable_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, github = self.setup_launcher(directory)
+            snapshot = github.snapshot.return_value
+            snapshot['prs'][0]['draft'] = False
+            sid = launcher.ledger.save_snapshot(snapshot)
+            run = launcher.ledger.create_run(sid, {**launcher.config, 'require_decision': True})
+            job = launcher.ledger.enqueue(run, snapshot['prs'][0], snapshot['main_sha'])
+            with launcher.ledger.connect() as db:
+                db.execute('UPDATE jobs SET state=?,result=? WHERE id=?',
+                           ('needs_followup', json.dumps({'outcome': 'awaiting_ci'}), job))
+            with patch('agentops.launch.reconcile_jobs', return_value={'errors': [], 'queued': [], 'ready': [1]}) as reconcile, patch('agentops.launch.requalify_inherited_review', return_value={'approved': False}):
+                launcher.refresh_reviews(snapshot)
+                self.assertEqual(reconcile.call_args.kwargs['job_ids'], {job})
+                self.assertTrue(reconcile.call_args.kwargs['retry_changed'])
+                launcher.config['publish'] = False
+                reconcile.reset_mock()
+                launcher.refresh_reviews(snapshot)
+                reconcile.assert_not_called()
+                launcher.config['publish'] = True
+                snapshot['prs'][0]['review_decision'] = 'APPROVED'
+                launcher.refresh_reviews(snapshot)
+                reconcile.assert_not_called()
+
     def test_publication_uses_configured_default_and_explicit_choice(self):
         with tempfile.TemporaryDirectory() as directory:
             launcher, _ = self.setup_launcher(directory)

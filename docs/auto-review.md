@@ -1,11 +1,12 @@
 # Automatic PR reviews
 
-Start the dashboard with `python -m agentops panel` and use the three controls under
-**Automatic reviews**:
+Start the dashboard with `python -m agentops panel` and open **Automatic reviews**
+from the header icon:
 
 - **Review new PRs automatically** schedules newly observed PRs and unreviewed required-review backlog.
 - **Review updated PRs automatically** schedules a PR when its head commit changes.
-  Comments, review activity, and CI updates do not trigger another review.
+  CI and discussion updates are rechecked against saved analysis; they do not
+  automatically start an unlimited sequence of fresh reviews.
 - **Only review non-draft PRs** keeps draft PRs waiting until they become ready.
 
 The first complete inventory establishes a baseline for ordinary PR events, while
@@ -33,6 +34,23 @@ qualification follow-ups. Completed mandatory attempts that still lack a decisio
 are shown as unresolved holds rather than rerun in an unlimited model loop.
 Existing manual review and requalification controls remain available for resolving
 these holds. A new head or main permits a fresh required-review attempt.
+
+Failed workers retry with an increasing delay, starting at five minutes and
+capped at one hour for the same head/main. Successful or active work takes
+precedence over old failures. Other PRs and new revisions remain eligible.
+
+Every five minutes the watcher rechecks up to four outstanding current-revision
+reviews. Attempt timestamps persist independently of success so malformed records
+cannot starve later reviews. Existing gates can release qualified approvals when
+CI completes; new relevant evidence can queue a follow-up within the original
+attempt budget. Resumption revalidates every queued PR's head, main, draft status,
+author exclusions, and saved/current publication authorization. Ineligible queued
+jobs are withdrawn atomically without cancelling already running workers.
+
+Workers must distinguish reused analysis from newly executed tests. Readiness
+still requires an actual passing test in the current session; reused artifacts
+must not be relabeled as fresh results. Qualification and publication guards are
+unchanged by automatic reconciliation.
 
 The page shows whether auto mode is enabled, the last successful inventory time,
 eligible work, unresolved holds, and polling errors. The dashboard server must remain running; the browser tab may

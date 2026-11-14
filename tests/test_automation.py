@@ -10,12 +10,54 @@ from agentops.cli import DEFAULTS
 
 
 class AutomationTests(unittest.TestCase):
+    def test_review_refresh_is_periodic_and_runs_before_new_dispatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'new_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot()
+            launcher.refresh_reviews.return_value = {'errors': [], 'resume_runs': ['existing']}
+            launcher.resume_reviews.return_value = []
+            with patch('agentops.automation.time.time', return_value=1000):
+                auto.tick()
+                auto.tick()
+            launcher.refresh_reviews.assert_called_once()
+            launcher.resume_reviews.assert_called_once_with(['existing'], non_draft_only=True)
+            with patch('agentops.automation.time.time', return_value=1301):
+                auto.tick()
+            self.assertEqual(launcher.refresh_reviews.call_count, 2)
+
+    def test_failed_exact_revision_backs_off_without_blocking_new_heads_or_other_prs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'new_prs': True, 'updated_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'), (3, 'b', False, 'user'))
+            for pr in launcher.github.snapshot.return_value['prs']:
+                pr['review_decision'] = 'REVIEW_REQUIRED'
+            launcher.ledger.jobs.return_value = [{'repo': 'o/r', 'number': 2, 'head_sha': 'a',
+                'main_sha': 'm'*40, 'state': 'failed', 'created': 990, 'result': {'reason': 'Invalid worker result'}}]
+            with patch('agentops.automation.time.time', return_value=1000):
+                auto.tick()
+            self.assertEqual(launcher.preview.call_args.args[0]['prs'], '3')
+            self.assertEqual(auto.status()['attention'][0]['state'], 'retry_wait')
+            launcher.launch.reset_mock()
+            launcher.preview.reset_mock()
+            launcher.github.snapshot.return_value['prs'] = launcher.github.snapshot.return_value['prs'][:1]
+            with patch('agentops.automation.time.time', return_value=1400):
+                auto.tick()
+            launcher.launch.assert_called_once()
+            launcher.launch.reset_mock()
+            launcher.github.snapshot.return_value['prs'][0]['head_sha'] = 'changed'
+            with patch('agentops.automation.time.time', return_value=1001):
+                auto.tick()
+            launcher.launch.assert_called_once()
+
     def setup_auto(self, directory):
         launcher = Mock()
         launcher.root = Path(directory)
         launcher.config = {'repo': 'o/r', 'exclude_authors': ['owner']}
         launcher.status.return_value = {}
         launcher.ledger.jobs.return_value = []
+        launcher.refresh_reviews.return_value = {'errors': []}
         launcher.preview.side_effect = lambda request: {'preview_id': 'receipt', 'prs': [
             p for p in launcher.github.snapshot.return_value['prs']
             if str(p['number']) in request['prs'].split()]}

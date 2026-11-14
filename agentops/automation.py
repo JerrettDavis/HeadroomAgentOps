@@ -63,6 +63,17 @@ class AutoReview:
             snapshot = self.launcher.github.snapshot(queue_only=True)
             if snapshot.get('complete') is not True or snapshot.get('repo') != self.data['repo']:
                 raise ValueError('Complete repository inventory required for auto-review')
+            if time.time() - (self.data.get('last_reconcile') or 0) >= 300:
+                try:
+                    refresh = self.launcher.refresh_reviews(snapshot, non_draft_only=settings['non_draft_only'])
+                    self.data['reconcile_errors'] = refresh.get('errors', [])
+                    self.data['resume_runs'] = sorted(set(self.data.get('resume_runs', []) + refresh.get('resume_runs', [])))
+                except (ValueError, RuntimeError, OSError) as error:
+                    self.data['reconcile_errors'] = [{'number': None, 'error': str(error)}]
+                self.data['last_reconcile'] = time.time()
+            if self.data.get('resume_runs') and (settings['new_prs'] or settings['updated_prs']):
+                self.data['resume_runs'] = self.launcher.resume_reviews(
+                    self.data['resume_runs'], non_draft_only=settings['non_draft_only'])
             seen = self.data['seen']
             # The ledger also covers a crash after launch but before this file was saved.
             jobs = [j for j in self.launcher.ledger.jobs() if j['repo'] == self.data['repo']
@@ -76,7 +87,8 @@ class AutoReview:
             excluded = {a.lower() for a in self.launcher.config.get('exclude_authors', [])}
             selected = []
             current = {}
-            attention = []
+            attention = [{'number': item.get('number'), 'state': 'reconcile_error',
+                          'reasons': [item['error']]} for item in self.data.get('reconcile_errors', [])]
             for pr in snapshot['prs']:
                 key = str(pr['number'])
                 old = seen.get(key)
@@ -95,6 +107,8 @@ class AutoReview:
                 exact = [j for j in prior if j['head_sha'] == head]
                 active = any(j.get('state') in ('queued', 'running') and not j.get('stale')
                              and not run_info(j).get('stopped') for j in exact)
+                failures = [j for j in exact if j.get('state') == 'failed' and not j.get('stale')
+                            and j.get('main_sha') == snapshot['main_sha']]
                 attempted = [j for j in exact if not j.get('stale')
                              and j.get('main_sha') == snapshot['main_sha']
                              and j.get('state') in ('ready', 'held', 'reviewed', 'awaiting_ci', 'needs_followup')
@@ -110,6 +124,17 @@ class AutoReview:
                                           'reasons': (attempted[-1].get('result') or {}).get(
                                               'qualification_limits', ['Decision still required'])})
                     continue
+                if failures and not active and pr['author'].lower() not in excluded:
+                    latest_failure = max(failures, key=lambda j: j.get('heartbeat') or j.get('created', 0))
+                    delay = min(3600, 300 * 2 ** min(len(failures) - 1, 4))
+                    retry_at = (latest_failure.get('heartbeat') or latest_failure.get('created', 0)) + delay
+                    if time.time() < retry_at:
+                        attention.append({'number': pr['number'], 'head_sha': head, 'state': 'retry_wait',
+                                          'retry_at': retry_at, 'failures': len(failures),
+                                          'reasons': ['Repeated worker failure; automatic retry is delayed',
+                                                      (latest_failure.get('result') or {}).get('reason',
+                                                       (latest_failure.get('result') or {}).get('error', 'Worker failed'))]})
+                        continue
                 if (event and settings[event] and pr['author'].lower() not in excluded
                         and (not settings['non_draft_only'] or not pr.get('draft', True))):
                     selected.append(pr['number'])

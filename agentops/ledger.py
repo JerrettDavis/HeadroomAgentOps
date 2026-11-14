@@ -263,6 +263,16 @@ class Ledger:
                 result.append(item)
             return result
 
+    def cancel_queued(self, identity, reason):
+        """Withdraw an undispatched job after its authorization changes."""
+        with self.connect(immediate=True) as db:
+            changed = db.execute("UPDATE jobs SET state='cancelled',stale=1,result=?,heartbeat=? "
+                                 "WHERE id=? AND state='queued'", (canonical({'reason': reason}), time.time(), identity)).rowcount
+            if changed:
+                db.execute('INSERT INTO job_events(job_id,kind,data,created) VALUES(?,?,?,?)',
+                           (identity, 'cancelled', canonical({'reason': reason}), time.time()))
+            return bool(changed)
+
     def reclassify(self, identity, state, result):
         if state not in TERMINAL:
             raise ValueError('Reclassification requires a terminal recorded outcome')

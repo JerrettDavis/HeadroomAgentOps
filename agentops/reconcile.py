@@ -26,10 +26,12 @@ def failure_evidence(pr):
     return set(failures)
 
 
-def reconcile_jobs(ledger, github, evidence, run_id=None, retry_changed=False, publisher=None):
+def reconcile_jobs(ledger, github, evidence, run_id=None, retry_changed=False, publisher=None, job_ids=None):
     report = {'ready': [], 'queued': [], 'held': [], 'stale': [], 'errors': []}
     current_by_number = {}
     for job in ledger.jobs(run_id):
+        if job_ids is not None and job['id'] not in job_ids:
+            continue
         result = job.get('result')
         if (job['repo'] != github.repo or job['stale'] or job['state'] not in
                 ('ready', 'reviewed', 'held', 'awaiting_ci', 'needs_followup') or not result or
