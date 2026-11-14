@@ -57,6 +57,22 @@ class PanelTests(unittest.TestCase):
             thread.start()
             try:
                 base = f'http://127.0.0.1:{server.server_port}'
+                for name, mime, signature in (
+                        ('icon.svg', 'image/svg+xml', b'<svg'),
+                        ('icon.ico', 'image/x-icon', b'\x00\x00\x01\x00'),
+                        ('icon-192.png', 'image/png', b'\x89PNG')):
+                    with urlopen(base + '/brand/' + name) as response:
+                        self.assertEqual(response.headers['Content-Type'], mime)
+                        self.assertTrue(response.read().startswith(signature))
+                with self.assertRaises(HTTPError):
+                    urlopen(base + '/brand/unknown.svg')
+                for name in ('marked.js', 'purify.js', 'markdown.js'):
+                    with urlopen(base + '/ui/' + name) as response:
+                        self.assertEqual(response.headers['Content-Type'], 'text/javascript; charset=utf-8')
+                        self.assertIn("script-src 'self'", response.headers['Content-Security-Policy'])
+                        self.assertGreater(len(response.read()), 100)
+                with self.assertRaises(HTTPError):
+                    urlopen(base + '/ui/unknown.js')
                 with urlopen(base + '/api/report') as response:
                     self.assertEqual(json.load(response)['total'], 1)
                     self.assertEqual(response.headers['Cache-Control'], 'no-store')

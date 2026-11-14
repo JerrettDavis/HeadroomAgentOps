@@ -1,3 +1,5 @@
+![Headroom AgentOps — Room to ship.](agentops/brand/repository.svg)
+
 # Headroom AgentOps
 
 Script-driven PR review with mechanical inventory and a fresh agent session for each PR. A Python coordinator owns the queue, evidence, shared SQLite ledger and GitHub writes. Each agent gets its own disposable checkout in a Linux container. It reviews one PR and exits.
@@ -232,11 +234,22 @@ Candidate bundles are also retained as content-addressed evidence before cleanup
 
 ## Verification
 
+On Windows, running the panel also adds a notification-area icon. Double-click
+it to open the dashboard, or right-click for dashboard and automatic review controls.
+The icon disappears when the panel exits. Hiding the icon leaves reviews running.
+Windows may initially place it in the notification area's overflow menu.
+
 ```powershell
 uv run --frozen python -m unittest discover -s tests -v
 git diff --check
 ```
 
 The suite covers transactional claims, pagination failures, changed queue membership, evidence integrity, separate sessions, workflow applicability, publication races, duplicate feedback, candidate bundle import with an actual local leased push, source guards and cleanup. Qualification limits are recorded in [validation scope](docs/public-validation.md). Private operational records are not part of this distribution.
+
+Browser regression tests run against a temporary ledger and a separate loopback
+server, with no watcher, real workers or GitHub calls. From `tests/ui`, run
+`npm ci --ignore-scripts`, `npx playwright install chromium`, then `npm test`.
+CI runs the same tests for Markdown safety, controls, responsive layout and
+scroll behavior. The browser test dependencies are development tools only.
 
 Use `worker/smoke.py` for a small real harness contract check. It prints a container/session handle; observe that exact handle until terminal before cleanup. Never infer that a model finished from a state file alone.

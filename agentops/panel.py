@@ -327,6 +327,16 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
             status, content_type = 200, 'application/json; charset=utf-8'
             if url.path == '/':
                 body, content_type = page.read_bytes(), 'text/html; charset=utf-8'
+            elif url.path in {'/ui/marked.js', '/ui/purify.js', '/ui/markdown.js'}:
+                body = (page.parent / 'ui' / url.path.rsplit('/', 1)[-1]).read_bytes()
+                content_type = 'text/javascript; charset=utf-8'
+            elif url.path in {
+                    '/brand/icon.svg', '/brand/icon.ico', '/brand/icon-180.png',
+                    '/brand/icon-192.png', '/brand/icon-512.png', '/favicon.ico'}:
+                name = 'icon.ico' if url.path == '/favicon.ico' else url.path.rsplit('/', 1)[-1]
+                body = (page.parent / 'brand' / name).read_bytes()
+                content_type = {'svg': 'image/svg+xml', 'ico': 'image/x-icon',
+                                'png': 'image/png'}[name.rsplit('.', 1)[-1]]
             elif url.path == '/api/launcher':
                 body = json.dumps({'token': token, 'repo': launcher.config['repo'],
                                    'harness': launcher.config['harness'],
@@ -357,7 +367,7 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
+            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' https:; frame-ancestors 'none'; base-uri 'none'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -378,6 +388,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None):
 
 def serve(path, host='127.0.0.1', port=8765, config=None):
     with make_server(path, host, port, config) as server:
+        from .tray import start_tray
+        start_tray(host, server.server_port)
         import threading
         watcher = threading.Thread(target=server.automation.run, daemon=True, name='auto-review')
         watcher.start()
