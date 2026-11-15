@@ -171,6 +171,32 @@ class PublisherTests(unittest.TestCase):
         self.publisher.publish(self.job, pr(), {**result(), 'actions': [action]})
         self.assertEqual(len(self.gh.posts), 1)
 
+    def test_dependabot_explicit_change_request_is_never_published(self):
+        self.gh.current['author'] = 'dependabot[bot]'
+        response = self.publisher.publish(self.job, self.gh.current, {**result(), 'actions': [
+            {'kind': 'review', 'event': 'REQUEST_CHANGES', 'body': 'Fix this defect'}]})
+        self.assertEqual(self.gh.posts, [])
+        self.assertTrue(any('Dependabot' in reason for held in response['held']
+                            for reason in held['reasons']))
+
+    def test_completed_review_gets_public_determination_even_without_findings(self):
+        review = {**result(), 'outcome': 'held', 'publication_qualification': 'held',
+                  'qualification_limits': ['Local runtime qualification missing'],
+                  'determination_required': True}
+        response = self.publisher.publish(self.job, pr(), review)
+        self.assertEqual(self.gh.posts[0]['event'], 'COMMENT')
+        self.assertIn('Local runtime qualification missing', self.gh.posts[0]['body'])
+        self.assertEqual(len(response['sent']), 1)
+
+    def test_required_decision_does_not_complete_with_another_comment(self):
+        review={**result(),'outcome':'held','publication_qualification':'held',
+                'require_decision':True,'determination_required':True,
+                'actions':[{'kind':'review','event':'COMMENT','body':'Still pending'}]}
+        response=self.publisher.publish(self.job,pr(),review)
+        self.assertEqual(self.gh.posts,[])
+        self.assertTrue(response['held'])
+        self.assertNotIn('decision',response)
+
     def test_new_unreviewed_notice_blocks_publication_after_worker_completion(self):
         self.ledger.notice('o/r', 'learning', 'New relevant evidence', {'source': 'another worker'}, [1])
         review = {**result(), 'reviewed_notice_ids': [],
@@ -279,12 +305,23 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(len(self.gh.posts), 1)
         self.assertNotEqual(response['sent'][0]['id'], 500)
 
-    def test_owner_approval_and_dependabot_changes_request_are_held(self):
-        for author, event in [('JerrettDavis', 'APPROVE'), ('dependabot[bot]', 'REQUEST_CHANGES')]:
+    def test_owner_approval_is_held(self):
+        for author, event in [('JerrettDavis', 'APPROVE')]:
             self.gh.current = {**pr(), 'author': author}
             action = {'kind': 'review', 'event': event, 'body': 'Review'}
             response = self.publisher.publish(self.job, self.gh.current, {**result(), 'actions': [action]})
             self.assertTrue(response['held'])
+        self.assertEqual(self.gh.posts, [])
+
+    def test_dependabot_tested_fix_can_be_published(self):
+        self.gh.current = {**pr(), 'author':'dependabot[bot]'}
+        calls = []
+        publisher = Publisher(self.gh, self.ledger,
+                              candidate_handler=lambda *args: calls.append(args) or {'id': 'fixed'})
+        response = publisher.publish(self.job,self.gh.current,{**result(), 'actions':[
+            {'kind':'push', 'candidate_sha':'c'*40}]})
+        self.assertEqual(len(response['sent']),1)
+        self.assertEqual(len(calls), 1)
         self.assertEqual(self.gh.posts, [])
 
     def test_stale_pr_cannot_receive_even_informational_feedback(self):

@@ -18,6 +18,24 @@ def result():
 
 
 class WorkerTests(unittest.TestCase):
+    def test_discard_unstarted_preparation_clears_auth_without_docker_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            session = str(uuid.uuid4())
+            directory = root / session
+            (directory / 'auth').mkdir(parents=True)
+            (directory / 'auth' / 'auth.json').write_text('synthetic-secret', encoding='utf8')
+            (directory / 'repo').mkdir()
+            (directory / 'repo' / 'file').write_text('checkout', encoding='utf8')
+            def forbidden(*args, **kwargs):
+                self.fail('Discarding an unstarted preparation must not call Docker')
+            worker = Worker(root, 'o/r', runner=forbidden)
+            worker.discard_prepared({'session_id': session, 'directory': str(directory)})
+            self.assertEqual(list((directory / 'auth').iterdir()), [])
+            self.assertFalse((directory / 'repo').exists())
+            with self.assertRaises(ValueError):
+                worker.discard_prepared({'session_id': session, 'directory': str(root.parent)})
+
     def test_staged_model_credentials_are_private_and_cannot_reuse_env_file(self):
         import os
         from agentops.worker import private_job_directory, stage_model_auth

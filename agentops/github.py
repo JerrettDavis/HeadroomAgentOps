@@ -23,7 +23,8 @@ QUEUE = '''query AgentOpsQueue($owner:String!,$name:String!,$cursor:String,$size
 QUEUE_IDENTITIES = '''query AgentOpsQueueIdentities($owner:String!,$name:String!,
  $cursor:String,$size:Int!) { repository(owner:$owner,name:$name) {
  pullRequests(first:$size,after:$cursor,states:OPEN,orderBy:{field:CREATED_AT,direction:ASC}) {
- nodes {number headRefOid updatedAt} totalCount pageInfo {hasNextPage endCursor} } } }'''
+ nodes {number headRefOid updatedAt isDraft baseRefName headRefName
+ author {login} headRepository {nameWithOwner}} totalCount pageInfo {hasNextPage endCursor} } } }'''
 THREADS = '''query AgentOpsThreads($owner:String!,$name:String!,$number:Int!,
  $cursor:String,$size:Int!) { repository(owner:$owner,name:$name) {
  pullRequest(number:$number) { reviewThreads(first:$size,after:$cursor) {
@@ -35,6 +36,15 @@ THREAD_COMMENTS = '''query AgentOpsThreadComments($id:ID!,$cursor:String) {
  node(id:$id) { ... on PullRequestReviewThread { comments(first:100,after:$cursor) {
  nodes { id databaseId body url createdAt updatedAt author {login} }
  pageInfo {hasNextPage endCursor} } } } }'''
+
+
+def read_pull(github,number):
+    for attempt in range(3):
+        try:
+            return github.pull(number)
+        except ValueError as exc:
+            if str(exc)!='PR changed during detail collection; retry with fresh evidence' or attempt==2:
+                raise
 
 
 class RejectedWrite(RuntimeError):
@@ -51,7 +61,8 @@ def gh_transport(method, endpoint, payload=None):
                                    payload.get('query', '').lstrip().startswith('query '))
     for attempt in range(3):
         result = subprocess.run(command, input=json.dumps(payload) if payload is not None else None,
-                                capture_output=True, text=True, encoding='utf8', timeout=120)
+                                capture_output=True, text=True, encoding='utf8', timeout=120,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if (not result.returncode or not readonly or attempt == 2 or
                 not re.search(r'HTTP (500|502|503|504)|TLS handshake timeout', result.stderr, re.IGNORECASE)):
             break
@@ -91,6 +102,25 @@ class GitHub:
 
     def main_sha(self):
         return self.request('GET', f'repos/{self.repo}/commits/main')['sha']
+
+    def review_workflow_baseline(self,current,main_sha):
+        compare=self.request('GET',f'repos/{self.repo}/compare/{main_sha}...{current["head_sha"]}')
+        base=compare['merge_base_commit']['sha']
+        cache=getattr(self,'_review_baseline_cache',{})
+        def load(reference):
+            if reference not in cache:
+                data={**current,'head_sha':reference}
+                self.workflow_qualification(data)
+                events=any(re.search(r'\bpull_request_review(?:_comment)?\b',
+                           self._source_cache[m['git_blob_sha']]) for m in data['workflow_manifest'])
+                cache[reference]={'manifest_hash':data['workflow_manifest_hash'],'review_events':events}
+            return cache[reference]
+        baseline,main=load(base),load(main_sha)
+        self._review_baseline_cache=cache
+        head_events=any(re.search(r'\bpull_request_review(?:_comment)?\b',
+                        self._source_cache[m['git_blob_sha']]) for m in current.get('workflow_manifest',[]))
+        return {**baseline,'merge_base_sha':base,
+                'review_events':baseline['review_events'] or main['review_events'] or head_events}
 
     def graphql(self, query, variables):
         result = self.request('POST', 'graphql', {'query': query, 'variables': variables})
@@ -151,18 +181,34 @@ class GitHub:
                 'review_decision': raw.get('reviewDecision'), 'mergeable': raw['mergeable'],
                 'merge_state': raw['mergeStateStatus']}
 
-    def snapshot(self):
+    def snapshot(self, queue_only=False, numbers=None):
+        if numbers is not None:
+            if not queue_only:
+                raise ValueError('Selected inventory is only for queue scheduling')
+            return self._selected_snapshot(numbers)
         before = self.main_sha()
         counts = set()
+        latest_count = None
         def fetch(cursor):
+            nonlocal latest_count
             data = self.graphql(QUEUE, {'owner': self.owner, 'name': self.name,
                                        'cursor': cursor, 'size': self.page_size})
             connection = data['repository']['pullRequests']
             counts.add(connection['totalCount'])
+            latest_count = connection['totalCount']
             return connection
         prs = [self._queue_pr(p) for p in self._connection(fetch)]
         if len({p['number'] for p in prs}) != len(prs):
             raise ValueError('Queue changed during pagination; duplicate PR')
+        if queue_only:
+            if latest_count != len(prs):
+                raise ValueError('Queue pagination was incomplete; collect again')
+            # Discovery is not review evidence. Requiring two globally identical
+            # inventories starves a busy repository; preview/launch independently
+            # bind the selected heads, draft status, target and current main.
+            return {'repo': self.repo, 'main_sha': self.main_sha(), 'prs': prs,
+                    'complete': True, 'inventory_kind': 'discovery',
+                    'collected_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
         def identities(cursor):
             data = self.graphql(QUEUE_IDENTITIES, {'owner': self.owner, 'name': self.name,
                 'cursor': cursor, 'size': self.page_size})
@@ -178,6 +224,36 @@ class GitHub:
         if before != after:
             raise ValueError('upstream main changed during inventory; collect a fresh snapshot')
         return {'repo': self.repo, 'main_sha': before, 'prs': prs, 'complete': True,
+                'collected_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+
+    def _selected_snapshot(self, numbers):
+        """Revalidate selected PRs without depending on unrelated queue arrivals."""
+        numbers = sorted(set(numbers))
+        if not numbers or any(type(n) is not int or n <= 0 for n in numbers):
+            raise ValueError('Select positive PR numbers')
+        before = self.main_sha()
+        prs = []
+        fields = ('state number title body url author {login} headRefOid baseRefOid baseRefName '
+                  'headRefName isDraft updatedAt reviewDecision mergeable mergeStateStatus '
+                  'headRepository {nameWithOwner}')
+        for start in range(0, len(numbers), self.page_size):
+            batch = numbers[start:start + self.page_size]
+            selection = ' '.join(f'pr{n}:pullRequest(number:{n}){{{fields}}}' for n in batch)
+            query = ('query AgentOpsSelection($owner:String!,$name:String!){'
+                     'repository(owner:$owner,name:$name){' + selection + '}}')
+            data = self.graphql(query, {'owner': self.owner, 'name': self.name})['repository']
+            if set(data) != {f'pr{n}' for n in batch}:
+                raise ValueError('Incomplete selected PR inventory')
+            for n in batch:
+                raw = data[f'pr{n}']
+                if raw is not None and raw['state'] == 'OPEN':
+                    if raw['number'] != n:
+                        raise ValueError('Selected PR identity mismatch')
+                    prs.append(self._queue_pr(raw))
+        if self.main_sha() != before:
+            raise ValueError('upstream main changed during inventory; collect a fresh snapshot')
+        return {'repo': self.repo, 'main_sha': before, 'prs': prs, 'complete': True,
+                'selection': numbers,
                 'collected_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
     def pull(self, number):

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="280" viewBox="0 0 1080 280"><title>Headroom AgentOps — Room to ship.</title><rect width="1080" height="280" rx="24" fill="#102733"/><path d="M780 0V280M900 0V280M1020 0V280" stroke="#1e3a46"/><svg x="52" y="52" width="176" height="176" viewBox="0 0 32 32">
+  <title>Headroom AgentOps</title>
+  <rect width="32" height="32" rx="8" fill="#102733"/>
+  <rect x="8" y="6" width="16" height="3" rx="1.5" fill="#73e2c0"/>
+  <rect x="8" y="13" width="4" height="13" rx="1" fill="#f5f4ed"/>
+  <rect x="20" y="13" width="4" height="13" rx="1" fill="#f5f4ed"/>
+  <rect x="11" y="18" width="10" height="4" fill="#f5f4ed"/>
+</svg><text x="270" y="119" fill="#f5f4ed" font-family="Segoe UI,Arial,sans-serif" font-size="62" font-weight="650" letter-spacing="-2">Headroom</text><text x="274" y="166" fill="#73e2c0" font-family="Segoe UI,Arial,sans-serif" font-size="26" letter-spacing="3">AgentOps</text><text x="274" y="215" fill="#b4c6cc" font-family="Segoe UI,Arial,sans-serif" font-size="20">Room to ship.</text></svg>

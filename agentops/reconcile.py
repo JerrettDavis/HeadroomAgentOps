@@ -5,13 +5,15 @@ import datetime
 from .policy import gate, revision_gate, terminal_ci_refresh
 from .discussion import fingerprint
 from .model import canonical
+from .checks import effective_ci
 
 
 def failure_evidence(pr):
     """Ignore pending progress while retaining changed terminal failure evidence."""
     failures = []
-    for field in ('checks', 'workflows'):
-        for item in pr.get(field, []):
+    checks,workflows=effective_ci(pr)
+    for field,items in (('checks',checks),('workflows',workflows)):
+        for item in items:
             if item.get('status') == 'completed' and item.get('conclusion') not in ('success', 'neutral', 'skipped'):
                 failures.append((field, canonical(item)))
     seen = set()
@@ -24,10 +26,12 @@ def failure_evidence(pr):
     return set(failures)
 
 
-def reconcile_jobs(ledger, github, evidence, run_id=None, retry_changed=False, publisher=None):
+def reconcile_jobs(ledger, github, evidence, run_id=None, retry_changed=False, publisher=None, job_ids=None):
     report = {'ready': [], 'queued': [], 'held': [], 'stale': [], 'errors': []}
     current_by_number = {}
     for job in ledger.jobs(run_id):
+        if job_ids is not None and job['id'] not in job_ids:
+            continue
         result = job.get('result')
         if (job['repo'] != github.repo or job['stale'] or job['state'] not in
                 ('ready', 'reviewed', 'held', 'awaiting_ci', 'needs_followup') or not result or

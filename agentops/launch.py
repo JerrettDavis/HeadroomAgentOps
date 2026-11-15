@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import json
 import os
 import re
 import secrets
@@ -16,6 +17,9 @@ from .cli import make_plan
 from .evidence import Evidence
 from .github import GitHub
 from .ledger import Ledger
+from .publisher import Publisher
+from .reconcile import reconcile_jobs
+from .requalification import requalify_inherited_review
 
 
 def parse_prs(text, repo):
@@ -50,7 +54,7 @@ class Launcher:
         return Ledger(self.root / 'ledger.sqlite3')
 
     def settings(self, request):
-        config = {**self.config, 'publish': False}
+        config = dict(self.config)
         for key in ('harness', 'model', 'concurrency', 'publish'):
             if key in request:
                 config[key] = request[key]
@@ -95,6 +99,12 @@ class Launcher:
 
     def preview(self, request):
         config = self.settings(request)
+        if type(request.get('non_draft_only', False)) is not bool:
+            raise ValueError('Non-draft filter must be true or false')
+        config['non_draft_only'] = request.get('non_draft_only', False)
+        if type(request.get('require_decision', False)) is not bool:
+            raise ValueError('Decision requirement must be true or false')
+        config['require_decision'] = request.get('require_decision', False)
         source = request.get('source')
         if source in ('single', 'batch'):
             numbers = set(parse_prs(request.get('prs', ''), config['repo']))
@@ -106,12 +116,18 @@ class Launcher:
             numbers = None
         else:
             raise ValueError('Choose a review source')
-        snapshot = self.github.snapshot()
+        snapshot = self.github.snapshot(queue_only=True, numbers=numbers)
         if snapshot.get('complete') is not True or snapshot.get('repo') != config['repo']:
             raise ValueError('Complete repository inventory required')
         selected = [p for p in snapshot['prs'] if numbers is None or p['number'] in numbers]
         if numbers is not None and numbers - {p['number'] for p in selected}:
             raise ValueError('Some requested PRs are no longer open; preview again')
+        excluded = {a.lower() for a in config.get('exclude_authors', [])}
+        if numbers is not None and any(p['author'].lower() in excluded for p in selected):
+            raise ValueError('PRs by excluded authors are assigned to other maintainers')
+        selected = [p for p in selected if p['author'].lower() not in excluded]
+        if config['non_draft_only']:
+            selected = [p for p in selected if p.get('draft') is False]
         if not selected:
             raise ValueError('No open pull requests match this selection')
         identity = secrets.token_urlsafe(24)
@@ -138,11 +154,16 @@ class Launcher:
             expected = {p['number']: p['head_sha'] for p in receipt['prs']}
             if not set(selected) <= expected.keys():
                 raise ValueError('Selection is outside the preview')
-            snapshot = self.github.snapshot()
+            snapshot = self.github.snapshot(queue_only=True, numbers=selected)
+            if snapshot.get('complete') is not True or snapshot.get('repo') != self.config['repo']:
+                raise ValueError('Complete repository inventory required')
             current = {p['number']: p['head_sha'] for p in snapshot['prs']}
             if any(current.get(n) != expected[n] for n in selected):
                 raise ValueError('A selected PR changed or closed; preview again')
             config = receipt['config']
+            if config.get('non_draft_only') and any(
+                    p['number'] in selected and p.get('draft') is not False for p in snapshot['prs']):
+                raise ValueError('A selected PR is now a draft; preview again')
             result = make_plan(config, argparse.Namespace(snapshot=None, pr=selected, limit=None),
                                self.ledger, type('Inventory', (), {'snapshot': lambda _: snapshot})(),
                                Evidence(self.root / 'evidence'))
@@ -152,17 +173,145 @@ class Launcher:
             logfile = logdir / f'{run_id}.log'
             # Persist the receipt before spawn so a retry can never dispatch twice.
             receipt['launched'] = {'run_id': run_id, 'selected': result['selected'], 'log': str(logfile)}
-            command = [sys.executable, '-m', 'agentops', '--state', str(self.root),
-                       'run', '--plan', run_id, '--force-fresh']
-            try:
-                with logfile.open('ab') as output:
-                    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                                               start_new_session=os.name != 'nt',
-                                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-                self.processes[run_id] = process
-            except OSError:
-                receipt['launched']['error'] = 'Coordinator could not start. Inspect the launch log and use the CLI to run this saved plan.'
+            self._spawn(receipt['launched'])
             return receipt['launched']
+
+    def _spawn(self, result):
+        command = [sys.executable, '-m', 'agentops', '--state', str(self.root),
+                   'run', '--plan', result['run_id'], '--force-fresh']
+        try:
+            with Path(result['log']).open('ab') as output:
+                process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=output,
+                                           start_new_session=os.name != 'nt',
+                                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            self.processes[result['run_id']] = process
+            result.pop('error', None)
+        except OSError:
+            result['error'] = 'Coordinator could not start. The saved plan remains queued.'
+        return result
+
+    def retry_launch(self, result):
+        """Retry only a definitive spawn failure, using the existing immutable plan."""
+        with self.lock:
+            if result['run_id'] in self.processes:
+                return {k: v for k, v in result.items() if k != 'error'}
+            run = self.ledger.get_run(result['run_id'])
+            jobs = self.ledger.jobs(result['run_id'])
+            snapshot = self.github.snapshot(queue_only=True, numbers=[j['number'] for j in jobs])
+            if snapshot.get('complete') is not True or snapshot.get('repo') != self.config['repo']:
+                raise ValueError('Complete repository inventory required before retrying a launch')
+            current = {p['number']: p for p in snapshot['prs']}
+            if any(j['number'] not in current or current[j['number']]['head_sha'] != j['head_sha']
+                   or (run['config'].get('non_draft_only') and current[j['number']].get('draft') is not False)
+                   for j in jobs):
+                self.ledger.stop(result['run_id'])
+                return {**result, 'error': None, 'cancelled': True}
+            return self._spawn(dict(result))
+
+    def refresh_reviews(self, snapshot, non_draft_only=True):
+        """Recheck current saved reviews after CI changes, without new reasoning."""
+        report = {'errors': [], 'resume_runs': []}
+        if snapshot.get('complete') is not True or snapshot.get('repo') != self.config['repo']:
+            raise ValueError('Complete repository inventory required for review refresh')
+        if not self.config.get('publish'):
+            return report
+        current = {pr['number']: pr for pr in snapshot['prs']}
+        excluded = {a.lower() for a in self.config.get('exclude_authors', [])}
+        latest = {}
+        for job in self.ledger.jobs():
+            if job['repo'] == self.config['repo']:
+                latest[job['number']] = job
+        selected = []
+        for number, job in latest.items():
+            pr = current.get(number)
+            if (not pr or pr['head_sha'] != job['head_sha'] or job['main_sha'] != snapshot['main_sha']
+                    or job['stale'] or pr['author'].lower() in excluded
+                    or pr.get('review_decision') == 'APPROVED'
+                    or (non_draft_only and pr.get('draft') is not False)):
+                continue
+            run = self.ledger.get_run(job['run_id'])
+            if run['stopped'] or not run['config'].get('publish') or not run['config'].get('require_decision'):
+                continue
+            if job['state'] == 'queued':
+                report['resume_runs'].append(job['run_id'])
+            elif (job['state'] in ('held', 'awaiting_ci', 'needs_followup')
+                    and (job.get('result') or {}).get('outcome') in ('ready', 'awaiting_ci')):
+                selected.append(job)
+        if not selected:
+            return report
+        evidence = Evidence(self.root / 'evidence')
+        publisher = Publisher(self.github, self.ledger)
+        # Persist attempts even when a legacy record cannot be reconciled. A
+        # skipped/erroring record must not permanently occupy the limited batch.
+        setting = 'review_refresh_attempts:' + self.config['repo']
+        with self.ledger.connect() as db:
+            row = db.execute('SELECT value FROM settings WHERE key=?', (setting,)).fetchone()
+        attempted = json.loads(row[0]) if row else {}
+        current_ids = {j['id'] for j in latest.values()}
+        attempted = {key: value for key, value in attempted.items()
+                     if key in current_ids and type(value) in (int, float)}
+        selected.sort(key=lambda j: (attempted.get(j['id'], 0), j['created']))
+        selected = selected[:4]
+        attempted.update({job['id']: time.time() for job in selected})
+        with self.ledger.connect(immediate=True) as db:
+            db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',
+                       (setting, json.dumps(attempted)))
+        refreshed = reconcile_jobs(self.ledger, self.github, evidence, retry_changed=True,
+                                   publisher=publisher, job_ids={j['id'] for j in selected})
+        report['errors'].extend(refreshed['errors'])
+        for job in selected:
+            try:
+                requalify_inherited_review(self.ledger, self.github, evidence, publisher, job['id'])
+                if self.ledger.job(job['id'])['state'] == 'queued':
+                    report['resume_runs'].append(job['run_id'])
+            except (ValueError, RuntimeError, OSError, KeyError) as error:
+                report['errors'].append({'number': job['number'], 'error': str(error)})
+        report['resume_runs'] = sorted(set(report['resume_runs']))
+        return report
+
+    def resume_reviews(self, run_ids, non_draft_only=True):
+        """Resume previously authorized queued follow-ups; never enqueue a new job."""
+        pending = []
+        with self.lock:
+            for run_id in set(run_ids):
+                process = self.processes.get(run_id)
+                if process is not None and process.poll() is None:
+                    continue
+                run = self.ledger.get_run(run_id)
+                if (run['stopped'] or not self.config.get('publish') or not run['config'].get('publish')
+                        or not run['config'].get('require_decision')):
+                    continue
+                jobs = [j for j in self.ledger.jobs(run_id) if j['state'] == 'queued' and not j['stale']]
+                if not jobs:
+                    continue
+                try:
+                    snapshot = self.github.snapshot(queue_only=True, numbers=[j['number'] for j in jobs])
+                    if snapshot.get('complete') is not True or snapshot.get('repo') != self.config['repo']:
+                        raise ValueError('Complete repository inventory required before resuming reviews')
+                except (ValueError, RuntimeError, OSError):
+                    pending.append(run_id)
+                    continue
+                current = {pr['number']: pr for pr in snapshot['prs']}
+                latest = {j['number']: j['id'] for j in self.ledger.jobs() if j['repo'] == self.config['repo']}
+                excluded = {a.lower() for a in self.config.get('exclude_authors', []) +
+                            run['config'].get('exclude_authors', [])}
+                for job in jobs:
+                    pr = current.get(job['number'])
+                    if (not pr or job['repo'] != self.config['repo'] or latest.get(job['number']) != job['id']
+                            or pr['head_sha'] != job['head_sha']
+                            or snapshot['main_sha'] != job['main_sha'] or pr['author'].lower() in excluded
+                            or ((non_draft_only or run['config'].get('non_draft_only')) and pr.get('draft') is not False)):
+                        self.ledger.cancel_queued(job['id'], 'Review eligibility changed before resuming')
+                jobs = [j for j in jobs if self.ledger.job(j['id'])['state'] == 'queued']
+                if not jobs:
+                    continue
+                logdir = self.root / 'launches'
+                logdir.mkdir(parents=True, exist_ok=True)
+                result = self._spawn({'run_id': run_id, 'selected': [j['number'] for j in jobs],
+                                      'log': str(logdir / f'{run_id}.log')})
+                if result.get('error'):
+                    pending.append(run_id)
+        return pending
 
     def status(self):
         with self.lock:

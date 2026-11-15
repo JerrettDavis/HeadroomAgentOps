@@ -11,6 +11,8 @@ from .policy import gate, revision_gate, terminal_ci_refresh
 from .publisher import Publisher
 from .redaction import redact
 from .worker import safe_job_path
+from .github import read_pull
+from .approval_baseline import attach_approval_baseline
 
 
 def recover_job(ledger, github, evidence, worker, identity, publisher=None):
@@ -20,7 +22,8 @@ def recover_job(ledger, github, evidence, worker, identity, publisher=None):
     recovered_stale = job['state'] == 'stale' and bool(previous.get('recovered_from_transport_error'))
     eligible = (job['state'] == 'failed' and not job['stale']) or recovered_stale
     if (not eligible or job['repo'] != github.repo or
-            not error.startswith('GitHub GET ') or
+            not (error.startswith('GitHub GET ') or
+                 error=='PR changed during detail collection; retry with fresh evidence') or
             previous.get('execution', {}).get('exit_code') != 0):
         raise ValueError('Recovery requires completed output interrupted by a GitHub read failure')
     handle = job['handle']
@@ -48,8 +51,12 @@ def recover_job(ledger, github, evidence, worker, identity, publisher=None):
     for notice in result.get('notices', []):
         authored_notices.add(ledger.notice(job['repo'], 'suggestion', notice['body'],
             {'job': identity, 'session': handle['session_id'], 'evidence': notice['evidence'],
-             'proposed_kind': notice['kind']}, None if notice.get('scope') == 'repository' else [job['number']]))
-    current, main_sha = github.pull(job['number']), github.main_sha()
+             'proposed_kind': notice['kind']}, None if notice.get('scope') == 'repository' and notice.get('kind')!='baseline' else [job['number']]))
+    current, main_sha = read_pull(github,job['number']), github.main_sha()
+    result['require_decision']=bool(ledger.get_run(job['run_id'])['config'].get('require_decision'))
+    result['determination_required']=True
+    if result['require_decision']:
+        attach_approval_baseline(github,evidence,current,main_sha,result)
     # A write may have succeeded before a later GET failed. Verify journal receipts
     # against authenticated ownership and exact body/type before excluding them.
     actor = None

@@ -14,11 +14,20 @@ from .planning import packet
 from .policy import gate, revision_gate, terminal_ci_refresh
 from .process import process_identity, owner_state
 from .reconcile import reconcile_jobs, failure_evidence
+from .qualification import record_shared_audit
+from .approval_baseline import attach_approval_baseline
+from .github import read_pull
+from .requalification import requalify_inherited_review
+from .recovery import recover_job
+from .dispatch_recovery import recover_unstarted_jobs
+from .ci_evidence import collect_failed_ci
+from .allowances import Allowances
 
 
 class Coordinator:
     def __init__(self, ledger, github, worker, evidence, concurrency=2, poll_seconds=5,
-                 timeout_seconds=3600, packet_budget=24576, publisher=None, emit=None, force_fresh=False):
+                 timeout_seconds=3600, packet_budget=24576, publisher=None, emit=None, force_fresh=False,
+                 require_decision=False, limits=None):
         if not 1 <= concurrency <= 4:
             raise ValueError('Concurrency must be 1–4')
         if timeout_seconds <= 0 or packet_budget <= 0:
@@ -28,15 +37,28 @@ class Coordinator:
         self.timeout_seconds, self.packet_budget = timeout_seconds, packet_budget
         self.publisher, self.emit = publisher, emit or (lambda event: None)
         self.force_fresh = force_fresh
+        self.require_decision = require_decision
+        self.limits = limits
         self.owner = canonical({**process_identity(), 'nonce': uuid.uuid4().hex})
+
+    @staticmethod
+    def _admission(limits):
+        try:
+            return limits.check()
+        except Exception:
+            # A settings/storage failure pauses dispatch, not observation and
+            # publication of workers that are already running.
+            return {'allowed': False, 'reason': 'Provider allowance unavailable; new reviews wait.'}
 
     def run(self, run_id):
         run = self.ledger.get_run(run_id)
+        limits = self.limits or Allowances(self.ledger, run['config'])
         snapshot = self.ledger.get_snapshot(run['snapshot_id'])
         live_main = self.github.main_sha()
         if live_main != snapshot['main_sha']:
             self.ledger.invalidate(snapshot['repo'], live_main,
-                                   {p['number']: p['head_sha'] for p in snapshot['prs']})
+                                   {p['number']: p['head_sha'] for p in snapshot['prs']},
+                                   scope=snapshot.get('selection'))
             return self.ledger.status(run_id)
         active = self._restore_active(run_id)
         if not self.ledger.get_run(run_id)['stopped']:
@@ -47,15 +69,33 @@ class Coordinator:
             stopped = bool(self.ledger.get_run(run_id)['stopped'])
             if not stopped:
                 while len(active) < self.concurrency:
+                    admission = self._admission(limits)
+                    if not admission['allowed']:
+                        self.emit({'event': 'allowance_paused', 'reason': admission['reason']})
+                        break
                     job = self.ledger.claim(self.owner, self.concurrency, run_id)
                     if not job:
                         break
                     try:
-                        original = self.github.pull(job['number'])
+                        original = read_pull(self.github,job['number'])
                         if original['head_sha'] != job['head_sha'] or self.github.main_sha() != job['main_sha']:
                             self.ledger.finish(job['id'], self.owner, 'stale', {'reason': 'Revision changed before dispatch'})
                             continue
                         notices = self.ledger.notices(job['repo'], job['number'])
+                        if self.require_decision or run['config'].get('require_decision'):
+                            baseline={}
+                            try:
+                                attach_approval_baseline(self.github,self.evidence,original,job['main_sha'],baseline)
+                                job.update(baseline)
+                            except (ValueError,RuntimeError,OSError,KeyError) as exc:
+                                self.emit({'event':'approval_baseline_unavailable','number':job['number'],'reason':str(exc)})
+                            job['require_decision']=True
+                            try:
+                                ci_reference=collect_failed_ci(self.github,self.evidence,original)
+                                if ci_reference:
+                                    job['result']={**(job.get('result') or {}),'ci_failure_evidence':ci_reference}
+                            except (ValueError,RuntimeError,OSError,KeyError) as exc:
+                                self.emit({'event':'ci_evidence_unavailable','number':job['number'],'reason':str(exc)})
                         reused = self._reuse(job, original, notices)
                         if reused:
                             state, result = reused
@@ -64,8 +104,38 @@ class Coordinator:
                                        'source_job': result['reused_from']})
                             continue
                         text = packet(original, snapshot, notices, self.evidence, self.packet_budget)
+                        prior = self.ledger.context_review(job)
+                        shared=self.ledger.workflow_audit(job['repo'],original.get('workflow_manifest_hash',''))
+                        if shared:
+                            job['shared_workflow_audit']=shared
+                        if prior:
+                            reference = (prior.get('result') or {}).get('evidence_record')
+                            if reference:
+                                try:
+                                    proof = self.evidence.get(reference['sha256'])
+                                    if (proof.get('number') == job['number'] and
+                                            proof.get('reviewed_pr_evidence')):
+                                        job['prior_review_context'] = {'source_job': prior['id'],
+                                                                       'result_evidence': reference}
+                                except (ValueError, OSError, KeyError):
+                                    pass
                         prepared = self.worker.prepare({**job, 'timeout_seconds': self.timeout_seconds}, original,
                                                        self.evidence, text)
+                        # Preparation may fetch a repository for minutes. Re-read
+                        # shared settings/usage at the actual dispatch boundary.
+                        admission = self._admission(limits)
+                        if (admission['allowed'] and hasattr(limits, 'matches_prepared') and
+                                not limits.matches_prepared(prepared, admission)):
+                            admission = {'allowed': False, 'reason': 'Provider account changed during preparation; staging will be retried.'}
+                        if not admission['allowed']:
+                            try:
+                                self.worker.discard_prepared(prepared)
+                            except Exception:
+                                self.emit({'event': 'staging_cleanup_required', 'number': job['number'],
+                                           'session': prepared['session_id']})
+                            self.ledger.defer(job['id'], self.owner)
+                            self.emit({'event': 'allowance_paused', 'reason': admission['reason']})
+                            break
                         pending = {'container': 'agentops-' + prepared['session_id'],
                                    'session_id': prepared['session_id'], 'directory': prepared['directory'],
                                    'started_at': time.time()}
@@ -120,7 +190,7 @@ class Coordinator:
                             result['candidate_archive'] = self.worker.archive_candidate(handle, job, self.evidence)
                         if hasattr(self.worker, 'metrics'):
                             result['execution'] = self.worker.metrics(handle)
-                        current, main_sha = self.github.pull(job['number']), self.github.main_sha()
+                        current, main_sha = read_pull(self.github,job['number']), self.github.main_sha()
                         notices = self.ledger.notices(job['repo'], job['number'])
                         revision_reasons = revision_gate(item['original'], current, job['main_sha'], main_sha)
                         refresh = terminal_ci_refresh(item['original'], current, main_sha)
@@ -128,7 +198,19 @@ class Coordinator:
                             result['ci_refresh'] = refresh
                         new_ids = {n['id'] for n in notices} - item['notice_ids']
                         acknowledged = set(result['coverage'].get('notices', []))
+                        if job.get('approval_source_baseline'):
+                            result['approval_source_baseline']=job['approval_source_baseline']
+                        result['require_decision']=bool(job.get('require_decision') or self.require_decision or
+                                                        run['config'].get('require_decision'))
+                        if result['require_decision']:
+                            try:
+                                attach_approval_baseline(self.github,self.evidence,current,main_sha,result)
+                            except (ValueError,RuntimeError,OSError,KeyError) as exc:
+                                self.emit({'event':'approval_baseline_unavailable','number':job['number'],'reason':str(exc)})
                         qualification = gate(item['original'], current, job['main_sha'], main_sha, result, notices)
+                        if (result['require_decision'] and not qualification and
+                                any(a['kind']=='review' and a.get('event')=='APPROVE' for a in result['actions'])):
+                            result['outcome']='ready'
                         if revision_reasons:
                             state = 'stale'
                         elif new_ids - acknowledged:
@@ -154,13 +236,17 @@ class Coordinator:
                             authored_notice = self.ledger.notice(job['repo'], 'suggestion', notice['body'],
                                 {'job': identity, 'session': handle['session_id'], 'evidence': notice['evidence'],
                                  'proposed_kind': notice['kind']},
-                                None if notice.get('scope') == 'repository' else [job['number']])
+                                None if notice.get('scope') == 'repository' and notice.get('kind')!='baseline' else [job['number']])
                             result['reviewed_notice_ids'].append(authored_notice)
                         result['reviewed_notice_ids'] = sorted(set(result['reviewed_notice_ids']))
+                        result['determination_required'] = True
+                        record_shared_audit(self.ledger,self.evidence,job,result)
                         if self.publisher and state != 'stale':
                             publication = self.publisher.publish(job, item['original'], result)
                             result['publication'] = publication
                             result['own_discussion_entries'] = publication['own_discussion_entries']
+                            if result.get('require_decision') and not publication.get('decision'):
+                                state='needs_followup'
                             if publication['held'] and state == 'ready':
                                 state = 'held'
                         result['evidence_record'] = self.evidence.put(result)
@@ -189,6 +275,20 @@ class Coordinator:
                 del active[identity]
             pending = any(j['state'] == 'queued' and not j['stale'] for j in self.ledger.jobs(run_id))
             if not active and (stopped or not pending):
+                if not stopped and (self.require_decision or run['config'].get('require_decision')) and self.publisher:
+                    for finished in self.ledger.jobs(run_id):
+                        try:
+                            previous=finished.get('result') or {}
+                            error=previous.get('error','')
+                            if (finished['state']=='failed' and previous.get('execution',{}).get('exit_code')==0 and
+                                    (error.startswith('GitHub GET ') or error=='PR changed during detail collection; retry with fresh evidence')):
+                                recovered=recover_job(self.ledger,self.github,self.evidence,self.worker,finished['id'],self.publisher)
+                                self.emit({'event':'decision_recovered',**recovered})
+                            qualification=requalify_inherited_review(self.ledger,self.github,self.evidence,self.publisher,finished['id'])
+                            if qualification['approved']:
+                                self.emit({'event':'approval_requalified','number':finished['number'],'additional_model_sessions':0})
+                        except (ValueError,RuntimeError,OSError,KeyError) as exc:
+                            self.emit({'event':'decision_followup_required','number':finished['number'],'reason':str(exc)})
                 return self.ledger.status(run_id)
             # Slots occupied by other coordinators remain occupied; do not infer process death.
             time.sleep(self.poll_seconds)
@@ -212,7 +312,7 @@ class Coordinator:
             self.worker.cleanup(handle)
 
     def _reuse(self, job, current, notices):
-        if self.force_fresh:
+        if self.force_fresh or (job.get('result') or {}).get('review_task') == 'qualification':
             return None
         for prior in self.ledger.prior_reviews(job):
             reference = (prior.get('result') or {}).get('evidence_record')
@@ -278,7 +378,8 @@ class Coordinator:
                 state = 'ready'
                 result['worker_outcome'] = proof.get('worker_outcome', proof['outcome'])
                 result['outcome'] = 'ready'
-            result.update(qualification_limits=limits, publication_qualification=state)
+            result.update(qualification_limits=limits, publication_qualification=state,
+                          determination_required=True)
             if self.publisher:
                 result['publication'] = self.publisher.publish(job, original, result)
                 result['own_discussion_entries'] = result['publication']['own_discussion_entries']
@@ -296,6 +397,8 @@ class Coordinator:
             handle = job['handle']
             if not handle:
                 self.ledger.recover(job['id'], lambda h: owner_state(job['owner']))
+                if self.require_decision or self.ledger.get_run(run_id)['config'].get('require_decision'):
+                    recover_unstarted_jobs(self.ledger,run_id)
                 continue
             observation = self.worker.observe(handle)
             if observation['state'] == 'missing':

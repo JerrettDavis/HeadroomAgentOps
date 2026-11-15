@@ -36,7 +36,7 @@ def review_evidence(pr):
     return normalized
 
 
-def plan(snapshot, prior):
+def plan(snapshot, prior, exclude_authors=()):
     def priority(pr):
         old = prior.get(pr['number'])
         changed = not old or old.get('head_sha') != pr['head_sha']
@@ -46,7 +46,9 @@ def plan(snapshot, prior):
             return 1
         return 2
     # Stable secondary sort keeps newest first without parsing platform timestamps.
-    newest = sorted(snapshot['prs'], key=lambda pr: pr['updated_at'], reverse=True)
+    excluded = {a.lower() for a in exclude_authors}
+    newest = sorted((p for p in snapshot['prs'] if p['author'].lower() not in excluded),
+                    key=lambda pr: pr['updated_at'], reverse=True)
     return sorted(newest, key=priority)
 
 

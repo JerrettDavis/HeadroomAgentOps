@@ -17,4 +17,4 @@ headroom-review = "agentops.cli:main"
 include = ["agentops*"]
 
 [tool.setuptools.package-data]
-agentops = ["panel.html"]
+agentops = ["panel.html", "tray.ps1", "brand/*.svg", "brand/*.ico", "brand/*.png", "ui/*.js", "ui/*.txt", "ui/*.md"]

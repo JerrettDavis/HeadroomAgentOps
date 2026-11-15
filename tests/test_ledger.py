@@ -79,6 +79,14 @@ class LedgerTests(unittest.TestCase):
             self.db.finish(job, 'one', 'ready', {})
         self.db.finish(job, 'one', 'stale', {})
 
+    def test_scoped_inventory_does_not_invalidate_unobserved_current_job(self):
+        old = self.enqueue(1)
+        current = self.db.enqueue(self.run, {'number': 2, 'head_sha': 'b'*40}, 'c'*40)
+        self.db.invalidate('o/r', 'c'*40, {1: 'b'*40}, scope=[1])
+        self.assertTrue(self.db.job(old)['stale'])
+        self.assertFalse(self.db.job(current)['stale'])
+        self.assertEqual(self.db.job(current)['state'], 'queued')
+
     def test_recovery_never_restarts_live_or_unknown_handle(self):
         job = self.enqueue()
         self.db.claim('dead-coordinator', 2)
