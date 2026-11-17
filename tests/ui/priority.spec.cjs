@@ -1,5 +1,17 @@
 const {test, expect} = require('@playwright/test');
 
+test('only approved PRs appear and a changed approval disappears on refresh', async ({page, request}) => {
+  const result = await (await request.get('/api/merge-priority')).json();
+  result.prs.find(row => row.number === 102).review_decision = 'REVIEW_REQUIRED';
+  result.prs.find(row => row.number === 104).review_decision = 'CHANGES_REQUESTED';
+  await page.route('**/api/merge-priority', route => route.fulfill({json: result}));
+  await page.goto('/');
+  await expect(page.locator('.priority-row')).toHaveCount(2);
+  await expect(page.locator('#priority-stacks')).toBeHidden();
+  result.prs[0].review_decision = null;
+  await expect(page.locator('.priority-row')).toHaveCount(1, {timeout: 12000});
+});
+
 test('default view gives linked merge order with visibly nested stacks', async ({page}) => {
   await page.goto('/');
   await expect(page.getByRole('heading', {name: 'Merge priority', exact: true})).toBeVisible();

@@ -18,10 +18,22 @@ def pr(number, **changes):
                 association='CONTRIBUTOR', labels=[], head_ref=f'branch-{number}',
                 base_ref='main', head_repo=REPO, head_sha=str(number) * 40,
                 base_sha='a' * 40, ci='passed', up_to_date=True, draft=False,
-                mergeable='MERGEABLE', merge_state='CLEAN', review_decision=''), **changes}
+                mergeable='MERGEABLE', merge_state='CLEAN', review_decision='APPROVED'), **changes}
 
 
 class RankingTests(unittest.TestCase):
+    def test_only_approved_prs_are_listed_and_unapproved_parents_still_block(self):
+        rows = rank_prs(REPO, [pr(1, review_decision='REVIEW_REQUIRED'),
+            pr(2, base_ref='branch-1', base_sha='1' * 40),
+            pr(3, review_decision='CHANGES_REQUESTED'), pr(4, review_decision=None), pr(5)])
+        self.assertEqual({r['number'] for r in rows}, {2, 5})
+        child = next(r for r in rows if r['number'] == 2)
+        self.assertFalse(child['ready_after_dependencies'])
+        self.assertIsNone(child['parent'])
+        self.assertEqual(child['depth'], 0)
+        self.assertFalse(child['dependencies'][0]['approved'])
+        self.assertEqual(next(r for r in rows if r['number'] == 5)['merge_order'], 1)
+
     def test_ready_category_order_and_maintainer_inclusion(self):
         rows = rank_prs(REPO, [pr(6), pr(5, title='fix: bug'),
             pr(4, labels=['fixes-main-ci']), pr(3, title='chore(deps): update'),
@@ -124,7 +136,7 @@ def node(number=1, **changes):
         baseRefName='main', headRefOid='b' * 40, baseRefOid='a' * 40,
         baseRef={'target': {'oid': 'a' * 40}},
         headRepository={'nameWithOwner': REPO}, mergeable='MERGEABLE',
-        mergeStateStatus='CLEAN', reviewDecision='REVIEW_REQUIRED',
+        mergeStateStatus='CLEAN', reviewDecision='APPROVED',
         labels={'nodes': [], 'pageInfo': {'hasNextPage': False}},
         commits={'nodes': [{'commit': {'oid': 'b' * 40, 'statusCheckRollup':
             {'state': 'SUCCESS', 'contexts': {'totalCount': 2}}}}]})

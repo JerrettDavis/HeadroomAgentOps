@@ -62,7 +62,7 @@ cd G:\git\HeadroomAgentOps
 
 Open <http://127.0.0.1:8765>. Viewing the panel needs Python; Docker and model authentication are not needed to view saved work. It binds to loopback. Stop the server with Ctrl+C.
 
-**Merge priority** opens by default and lists all open PRs, including maintainer
+**Merge priority** opens by default and lists only approved open PRs, including maintainer
 PRs excluded from automated reviews. It checks GitHub in the background about once
 a minute while the view is open; large repositories can take longer. Non-draft,
 green, up-to-date PRs come first, then maintainer, dependencies, declared main-CI
@@ -80,7 +80,8 @@ branches infer a parent; ambiguous matches need an explicit declaration such as
 `Depends on #123` or `Depends on https://github.com/owner/repo/pull/123` on its own
 line. Multiple references on that line are supported. Merged dependencies are
 satisfied; missing, closed-unmerged or cyclic prerequisites remain visible as
-blockers. The numbered list respects prerequisites and priority categories;
+blockers. Unapproved prerequisites are excluded from the list and stack outline
+but still block their approved dependants. The numbered list respects prerequisites and priority categories;
 “After prerequisites” means recheck after merging the parents.
 
 Readiness uses CI from the observed head and ancestry against the **current**

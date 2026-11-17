@@ -8,7 +8,9 @@ independent of its ranking.
 ## Proposed behavior
 
 - Add a Merge priority view using the existing Python panel and browser polling.
-- Show all open PRs, including maintainer PRs excluded from automated reviews.
+- Show only approved open PRs, including maintainer PRs excluded from automated
+  reviews. Unapproved prerequisites remain blockers without being listed or
+  appearing in the stack outline.
 - Put non-draft PRs with passing CI and verified freshness first. Show drafts,
   failing or pending CI, conflicts, stale branches and missing evidence with
   explicit reasons outside the ready group.

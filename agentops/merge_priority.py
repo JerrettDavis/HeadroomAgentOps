@@ -86,8 +86,8 @@ def rank_prs(repo, prs, default_branch='main', resolved=None):
             blockers.append('Behind base branch' if pr.get('up_to_date') is False else 'Branch freshness unknown')
         if pr.get('mergeable') != 'MERGEABLE':
             blockers.append('Merge conflicts' if pr.get('mergeable') == 'CONFLICTING' else 'Mergeability unknown')
-        if pr.get('review_decision') == 'CHANGES_REQUESTED':
-            blockers.append('Changes requested')
+        if pr.get('review_decision') != 'APPROVED':
+            blockers.append('Approval required')
         rows[number] = {**pr, 'repo': repo, 'url': f'https://github.com/{repo}/pull/{number}',
             'category_rank': rank, 'category': label, 'category_reason': reason,
             'blockers': blockers, 'dependencies': [], 'ready': False,
@@ -113,7 +113,8 @@ def rank_prs(repo, prs, default_branch='main', resolved=None):
             local = dep_repo == repo.lower() and dep_number in rows
             state = 'open' if local else resolved.get((dep_repo, dep_number), 'unknown')
             row['dependencies'].append({'repo': dep_repo, 'number': dep_number,
-                'url': f'https://github.com/{dep_repo}/pull/{dep_number}', 'state': state})
+                'url': f'https://github.com/{dep_repo}/pull/{dep_number}', 'state': state,
+                'approved': rows[dep_number].get('review_decision') == 'APPROVED' if local else None})
             if local:
                 edges[number].add(dep_number)
             elif state != 'merged':
@@ -150,6 +151,15 @@ def rank_prs(repo, prs, default_branch='main', resolved=None):
         row['merge_order'] = len(ordered) + 1 if viable[n] else None
         ordered.append(row)
         remaining.remove(n)
+    # Keep unapproved prerequisites in the graph, but never in the visible list.
+    ordered = [row for row in ordered if row.get('review_decision') == 'APPROVED']
+    visible = {row['number'] for row in ordered}
+    for row in ordered:
+        if row['parent'] not in visible:
+            row['parent'] = None
+            row['depth'] = 0
+        else:
+            row['depth'] = rows[row['parent']]['depth'] + 1
     # Number suggestions consecutively, excluding blocked rows.
     count = 0
     for row in ordered:
@@ -204,7 +214,8 @@ def collect_priority(github, comparisons=None):
         current = None
         if node.get('mergeStateStatus') == 'BEHIND':
             current = False
-        elif base_sha and ci == 'passed' and node.get('isDraft') is False:
+        elif (base_sha and ci == 'passed' and node.get('isDraft') is False
+              and node.get('reviewDecision') == 'APPROVED'):
             identity = (github.repo.lower(), base_sha, node['headRefOid'])
             try:
                 with comparison_lock:

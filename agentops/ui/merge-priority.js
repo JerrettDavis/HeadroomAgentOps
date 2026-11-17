@@ -22,8 +22,10 @@
     if (signature === lastRender) return;
     lastRender = signature;
     const scrollTop = byId('priority-view').scrollTop;
-    const rows = d.prs || [], ready = fresh ? rows.filter(r => r.ready).length : 0;
-    byId('priority-count').textContent = `${ready} ready now / ${rows.length} open`;
+    const rows = (d.prs || []).filter(row => row.review_decision === 'APPROVED');
+    const visible = new Set(rows.map(row => row.number));
+    const ready = fresh ? rows.filter(r => r.ready).length : 0;
+    byId('priority-count').textContent = `${ready} ready now / ${rows.length} approved`;
     const observation = d.observed_at ? `Observed ${new Date(d.observed_at * 1000).toLocaleString()}` : 'No GitHub observation yet';
     byId('priority-status').textContent = [d.repo, observation,
       d.error || (!fresh ? (d.refreshing ? 'Refreshing; previous evidence is unverified.' : 'Evidence is unverified.') :
@@ -34,12 +36,12 @@
     // even when other higher-priority PRs intervene in the numbered merge order.
     const children = new Map();
     for (const row of rows) {
-      if (row.parent != null) {
+      if (row.parent != null && visible.has(row.parent)) {
         if (!children.has(row.parent)) children.set(row.parent, []);
         children.get(row.parent).push(row);
       }
     }
-    const roots = rows.filter(row => row.parent == null && children.has(row.number));
+    const roots = rows.filter(row => !visible.has(row.parent) && children.has(row.number));
     const outline = [];
     const tasks = [{kind: 'text', value: '</ul>'}, ...roots.slice().reverse().map(row => ({kind: 'row', row})), {kind: 'text', value: '<ul>'}];
     while (tasks.length) {
@@ -59,7 +61,7 @@
       const blockers = fresh ? row.blockers || [] : ['Evidence is unverified; waiting for a successful refresh'];
       const deps = (row.dependencies || []).map(dep => githubLink(dep.url,
         `${dep.repo === d.repo?.toLowerCase() ? '' : dep.repo}#${dep.number}`) +
-        (dep.state === 'merged' ? ' (merged)' : dep.state !== 'open' ? ` (${escape(dep.state)})` : '')).join(', ');
+        (dep.state === 'merged' ? ' (merged)' : dep.approved === false ? ' (not approved)' : dep.state !== 'open' ? ` (${escape(dep.state)})` : '')).join(', ');
       const depth = Math.min(5, Math.max(0, Number(row.depth) || 0));
       const title = `#${row.number} ${row.title}`;
       return `<li class="priority-row" data-number="${escape(row.number)}" data-parent="${escape(row.parent ?? '')}" data-ready="${readyNow}" style="--depth:${depth}">
@@ -69,7 +71,7 @@
         <div class="badges"><span class="priority-state ${readyNow ? 'good' : ''}">${state}</span>${tag(row.category)}${tag('CI ' + (row.ci || 'unknown'), row.ci === 'failed' ? 'bad' : '')}${tag(row.up_to_date === true ? 'Up to date with base' : row.up_to_date === false ? 'Behind base' : 'Freshness unknown')}${row.draft ? tag('Draft') : ''}${row.review_decision ? tag(row.review_decision.replaceAll('_', ' ').toLowerCase()) : ''}</div>
         ${deps ? `<p class="priority-dependencies">Prerequisites: ${deps}</p>` : ''}
         <p class="priority-reasons">${escape(blockers.length ? blockers.join(' · ') : row.category_reason)}${row.category === 'Main CI fix (declared)' ? ' · Main CI repair is declared; verify the fix during review.' : ''}</p></div></li>`;
-    }).join('') || `<li class="empty">${fresh ? 'No open PRs in this repository.' : 'Waiting for current GitHub PRs. This view needs GitHub sign-in and repository access.'}</li>`;
+    }).join('') || `<li class="empty">${fresh ? 'No approved open PRs in this repository.' : 'Waiting for current approved GitHub PRs. This view needs GitHub sign-in and repository access.'}</li>`;
     byId('priority-view').scrollTop = scrollTop;
   }
 

@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix='agentops-ui-') as directory:
         def status(self):
             common = dict(author='maintainer', association='MEMBER', labels=[], body='',
                           ci='passed', up_to_date=True, draft=False, mergeable='MERGEABLE',
-                          base_ref='main', head_repo='example/repository', review_decision='REVIEW_REQUIRED')
+                          base_ref='main', head_repo='example/repository', review_decision='APPROVED')
             rows = [dict(common, number=101, title='fix: repair cache', head_ref='repair'),
                     dict(common, number=102, title='feat: follow-up', head_ref='followup', base_ref='repair',
                          association='CONTRIBUTOR'),
