@@ -322,7 +322,8 @@ def archived_diff(root, identity, expected_head, repository):
         return git('-C', str(repo), 'diff', '--no-ext-diff', '--no-textconv', '--no-color', head, candidate)
 
 
-def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=None, usage_identity_reader=None):
+def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=None, usage_identity_reader=None,
+                priority_monitor=None):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise ValueError('The panel binds to loopback only')
     page = Path(__file__).with_name('panel.html')
@@ -330,6 +331,7 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
         '/ui/marked.js': (page.parent / 'ui' / 'marked.js', 'text/javascript; charset=utf-8'),
         '/ui/purify.js': (page.parent / 'ui' / 'purify.js', 'text/javascript; charset=utf-8'),
         '/ui/markdown.js': (page.parent / 'ui' / 'markdown.js', 'text/javascript; charset=utf-8'),
+        '/ui/merge-priority.js': (page.parent / 'ui' / 'merge-priority.js', 'text/javascript; charset=utf-8'),
         '/brand/icon.svg': (page.parent / 'brand' / 'icon.svg', 'image/svg+xml'),
         '/brand/icon.ico': (page.parent / 'brand' / 'icon.ico', 'image/x-icon'),
         '/favicon.ico': (page.parent / 'brand' / 'icon.ico', 'image/x-icon'),
@@ -341,6 +343,9 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
     from .launch import Launcher
     from .cli import DEFAULTS
     launcher = Launcher(path, config or DEFAULTS)
+    from .merge_priority import PriorityMonitor, collect_priority
+    comparisons = {}
+    priority = priority_monitor or PriorityMonitor(lambda: collect_priority(launcher.github, comparisons))
     from .automation import AutoReview
     automation = AutoReview(launcher)
     from .allowance_monitor import AllowanceMonitor
@@ -415,6 +420,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                                    'publish': launcher.config['publish'],
                                    'automation': automation.status(),
                                    'processes': launcher.status()}).encode()
+            elif url.path == '/api/merge-priority':
+                body = redact(json.dumps(priority.status(), ensure_ascii=False)).encode()
             elif url.path == '/api/allowances':
                 try:
                     body = json.dumps(allowances.status(refresh=True), allow_nan=False).encode()

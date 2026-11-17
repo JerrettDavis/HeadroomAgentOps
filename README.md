@@ -62,6 +62,33 @@ cd G:\git\HeadroomAgentOps
 
 Open <http://127.0.0.1:8765>. Viewing the panel needs Python; Docker and model authentication are not needed to view saved work. It binds to loopback. Stop the server with Ctrl+C.
 
+**Merge priority** opens by default and lists all open PRs, including maintainer
+PRs excluded from automated reviews. It checks GitHub in the background about once
+a minute while the view is open; large repositories can take longer. Non-draft,
+green, up-to-date PRs come first, then maintainer, dependencies, declared main-CI
+repairs, fixes and features. Each suggestion links to GitHub and explains its
+readiness. **Reviews** returns to the saved review sessions; your view is remembered.
+
+Maintainer status uses GitHub's owner/member/collaborator author association.
+Dependency and fix/feature categories use labels or conventional commit titles.
+Main-CI repairs need a `fixes-main-ci`, `fix-main-ci` or `main-ci-fix` label, or an
+explicit “Fixes main CI” / “Restores main CI” declaration in the title or body;
+the final reviewer still needs to verify the repair.
+
+Stacks have a nested outline and linked prerequisites. Matching repository
+branches infer a parent; ambiguous matches need an explicit declaration such as
+`Depends on #123` or `Depends on https://github.com/owner/repo/pull/123` on its own
+line. Multiple references on that line are supported. Merged dependencies are
+satisfied; missing, closed-unmerged or cyclic prerequisites remain visible as
+blockers. The numbered list respects prerequisites and priority categories;
+“After prerequisites” means recheck after merging the parents.
+
+Readiness uses CI from the observed head and ancestry against the **current**
+base-branch tip. Unknown checks, conflicts, requested changes and stale branches
+need attention. Observations expire after three minutes; failed refreshes clear
+ready indicators immediately. This view requires `gh` sign-in and repository
+read access, and suggests an order for human review without merging PRs.
+
 Choose **New review** to start an individual PR, a batch of PR numbers or GitHub
 URLs, all open PRs, or a GitHub query such as `author:username label:bug`.
 Queries are scoped to the configured repository; incomplete searches or searches

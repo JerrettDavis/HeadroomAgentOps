@@ -107,7 +107,7 @@ class PanelTests(unittest.TestCase):
                         self.assertTrue(response.read().startswith(signature))
                 with self.assertRaises(HTTPError):
                     urlopen(base + '/brand/unknown.svg')
-                for name in ('marked.js', 'purify.js', 'markdown.js'):
+                for name in ('marked.js', 'purify.js', 'markdown.js', 'merge-priority.js'):
                     with urlopen(base + '/ui/' + name) as response:
                         self.assertEqual(response.headers['Content-Type'], 'text/javascript; charset=utf-8')
                         self.assertIn("script-src 'self'", response.headers['Content-Security-Policy'])

@@ -14,6 +14,7 @@ from agentops.ledger import Ledger
 from agentops.panel import make_server
 from agentops.planning import packet
 from agentops.evidence import Evidence
+from agentops.merge_priority import rank_prs
 
 
 parser = argparse.ArgumentParser()
@@ -76,6 +77,21 @@ with tempfile.TemporaryDirectory(prefix='agentops-ui-') as directory:
         return {'source': 'Synthetic account usage', 'blocked': False, 'auth_fingerprint': 'synthetic', 'windows': [{
             'id': 'weekly', 'label': 'Weekly', 'period': 'weekly', 'window_minutes': 10080,
             'used_percent': 60, 'resets_at': time.time() + 86400}]}
+    class SyntheticPriority:
+        def status(self):
+            common = dict(author='maintainer', association='MEMBER', labels=[], body='',
+                          ci='passed', up_to_date=True, draft=False, mergeable='MERGEABLE',
+                          base_ref='main', head_repo='example/repository', review_decision='REVIEW_REQUIRED')
+            rows = [dict(common, number=101, title='fix: repair cache', head_ref='repair'),
+                    dict(common, number=102, title='feat: follow-up', head_ref='followup', base_ref='repair',
+                         association='CONTRIBUTOR'),
+                    dict(common, number=103, title='chore(deps): update runtime', head_ref='deps',
+                         association='CONTRIBUTOR'),
+                    dict(common, number=104, title='fix: pending checks', head_ref='pending', ci='pending')]
+            return dict(repo='example/repository', default_branch='main', fresh=True,
+                        observed_at=time.time(), refreshing=False, error=None, refresh_seconds=60,
+                        prs=rank_prs('example/repository', rows))
     with make_server(path, port=args.port, config=config, usage_reader=synthetic_usage,
+                     priority_monitor=SyntheticPriority(),
                      usage_identity_reader=lambda config: 'synthetic') as server:
         server.serve_forever()
