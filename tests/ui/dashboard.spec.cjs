@@ -1,6 +1,7 @@
 const {test, expect} = require('@playwright/test');
 
 test.beforeEach(async ({page, request, baseURL}) => {
+  await page.addInitScript(() => localStorage.setItem('agentops-view', 'reviews'));
   await page.route('**/*', route => new URL(route.request().url()).origin === baseURL
     ? route.continue() : route.abort());
   const info = await (await request.get('/api/launcher')).json();
