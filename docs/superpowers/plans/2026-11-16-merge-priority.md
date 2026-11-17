@@ -61,6 +61,5 @@ badges and inline blocker text.
   caused by historical PR base OIDs.
 - Desktop dark and mobile light views were inspected; deep nested stacks,
   multiple prerequisite links, keyboard access and narrow overflow were tested.
-- Reloaded only the live panel process; coordinator PID 193352 and four active
-  review workers remained running. Panel PID is 254684 on port 8765, using the
-  existing configuration and state directory.
+- Reloaded only the live panel process; the existing coordinator and active
+  review workers remained running with their configuration and state preserved.

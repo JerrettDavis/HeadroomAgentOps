@@ -172,7 +172,7 @@ Start with a small review-only pilot:
 Review selected PRs with another harness:
 
 ```powershell
-.\headroom-review.ps1 run --pr 4760 --harness claude --auth-root C:/Users/you/.claude --no-publish
+.\headroom-review.ps1 run --pr 4760 --harness claude --auth-root "$env:USERPROFILE\.claude" --no-publish
 ```
 
 Run the complete current queue with safe maintainer publication enabled:
