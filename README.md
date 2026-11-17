@@ -68,6 +68,9 @@ a minute while the view is open; large repositories can take longer. Non-draft,
 green, up-to-date PRs come first, then maintainer, dependencies, declared main-CI
 repairs, fixes and features. Each suggestion links to GitHub and explains its
 readiness. **Reviews** returns to the saved review sessions; your view is remembered.
+PRs with merge conflicts or failed CI are excluded from both the list and stack
+outline; they still block their dependants. Pending or unknown CI remains visible
+as needing attention.
 
 Maintainer status uses GitHub's owner/member/collaborator author association.
 Dependency and fix/feature categories use labels or conventional commit titles.

@@ -1,5 +1,18 @@
 const {test, expect} = require('@playwright/test');
 
+test('conflicts and failed CI disappear from the list and stack outline on refresh', async ({page, request}) => {
+  const result = await (await request.get('/api/merge-priority')).json();
+  result.prs.find(row => row.number === 101).ci = 'failed';
+  result.prs.find(row => row.number === 102).mergeable = 'CONFLICTING';
+  await page.route('**/api/merge-priority', route => route.fulfill({json: result}));
+  await page.goto('/');
+  await expect(page.locator('.priority-row')).toHaveCount(2);
+  await expect(page.locator('#priority-stacks')).toBeHidden();
+  result.prs.find(row => row.number === 103).merge_state = 'DIRTY';
+  await expect(page.locator('.priority-row')).toHaveCount(1, {timeout: 12000});
+  await expect(page.locator('.priority-row')).toContainText('CI pending');
+});
+
 test('only approved PRs appear and a changed approval disappears on refresh', async ({page, request}) => {
   const result = await (await request.get('/api/merge-priority')).json();
   result.prs.find(row => row.number === 102).review_decision = 'REVIEW_REQUIRED';

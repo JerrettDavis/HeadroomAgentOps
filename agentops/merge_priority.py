@@ -84,8 +84,10 @@ def rank_prs(repo, prs, default_branch='main', resolved=None):
             blockers.append('CI ' + pr.get('ci', 'unknown'))
         if pr.get('up_to_date') is not True:
             blockers.append('Behind base branch' if pr.get('up_to_date') is False else 'Branch freshness unknown')
-        if pr.get('mergeable') != 'MERGEABLE':
-            blockers.append('Merge conflicts' if pr.get('mergeable') == 'CONFLICTING' else 'Mergeability unknown')
+        if pr.get('mergeable') == 'CONFLICTING' or pr.get('merge_state') == 'DIRTY':
+            blockers.append('Merge conflicts')
+        elif pr.get('mergeable') != 'MERGEABLE':
+            blockers.append('Mergeability unknown')
         if pr.get('review_decision') != 'APPROVED':
             blockers.append('Approval required')
         rows[number] = {**pr, 'repo': repo, 'url': f'https://github.com/{repo}/pull/{number}',
@@ -151,8 +153,10 @@ def rank_prs(repo, prs, default_branch='main', resolved=None):
         row['merge_order'] = len(ordered) + 1 if viable[n] else None
         ordered.append(row)
         remaining.remove(n)
-    # Keep unapproved prerequisites in the graph, but never in the visible list.
-    ordered = [row for row in ordered if row.get('review_decision') == 'APPROVED']
+    # Hidden prerequisites remain in the graph so their dependants stay blocked.
+    ordered = [row for row in ordered if row.get('review_decision') == 'APPROVED'
+               and row.get('ci') != 'failed' and row.get('mergeable') != 'CONFLICTING'
+               and row.get('merge_state') != 'DIRTY']
     visible = {row['number'] for row in ordered}
     for row in ordered:
         if row['parent'] not in visible:

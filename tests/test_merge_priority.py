@@ -22,6 +22,17 @@ def pr(number, **changes):
 
 
 class RankingTests(unittest.TestCase):
+    def test_ci_failures_and_conflicts_are_hidden_but_still_block_dependants(self):
+        rows = rank_prs(REPO, [pr(1, ci='failed'),
+            pr(2, base_ref='branch-1', base_sha='1' * 40),
+            pr(3, mergeable='CONFLICTING'), pr(4, merge_state='DIRTY'),
+            pr(5, ci='pending'), pr(6, ci='unknown'), pr(7)])
+        self.assertEqual({r['number'] for r in rows}, {2, 5, 6, 7})
+        child = next(r for r in rows if r['number'] == 2)
+        self.assertFalse(child['ready_after_dependencies'])
+        self.assertIsNone(child['parent'])
+        self.assertEqual(child['depth'], 0)
+
     def test_only_approved_prs_are_listed_and_unapproved_parents_still_block(self):
         rows = rank_prs(REPO, [pr(1, review_decision='REVIEW_REQUIRED'),
             pr(2, base_ref='branch-1', base_sha='1' * 40),

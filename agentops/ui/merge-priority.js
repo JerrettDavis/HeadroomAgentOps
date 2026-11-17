@@ -22,7 +22,8 @@
     if (signature === lastRender) return;
     lastRender = signature;
     const scrollTop = byId('priority-view').scrollTop;
-    const rows = (d.prs || []).filter(row => row.review_decision === 'APPROVED');
+    const rows = (d.prs || []).filter(row => row.review_decision === 'APPROVED'
+      && row.ci !== 'failed' && row.mergeable !== 'CONFLICTING' && row.merge_state !== 'DIRTY');
     const visible = new Set(rows.map(row => row.number));
     const ready = fresh ? rows.filter(r => r.ready).length : 0;
     byId('priority-count').textContent = `${ready} ready now / ${rows.length} approved`;
@@ -71,7 +72,7 @@
         <div class="badges"><span class="priority-state ${readyNow ? 'good' : ''}">${state}</span>${tag(row.category)}${tag('CI ' + (row.ci || 'unknown'), row.ci === 'failed' ? 'bad' : '')}${tag(row.up_to_date === true ? 'Up to date with base' : row.up_to_date === false ? 'Behind base' : 'Freshness unknown')}${row.draft ? tag('Draft') : ''}${row.review_decision ? tag(row.review_decision.replaceAll('_', ' ').toLowerCase()) : ''}</div>
         ${deps ? `<p class="priority-dependencies">Prerequisites: ${deps}</p>` : ''}
         <p class="priority-reasons">${escape(blockers.length ? blockers.join(' · ') : row.category_reason)}${row.category === 'Main CI fix (declared)' ? ' · Main CI repair is declared; verify the fix during review.' : ''}</p></div></li>`;
-    }).join('') || `<li class="empty">${fresh ? 'No approved open PRs in this repository.' : 'Waiting for current approved GitHub PRs. This view needs GitHub sign-in and repository access.'}</li>`;
+    }).join('') || `<li class="empty">${fresh ? 'No approved open PRs without conflicts or failed CI.' : 'Waiting for current approved GitHub PRs. This view needs GitHub sign-in and repository access.'}</li>`;
     byId('priority-view').scrollTop = scrollTop;
   }
 
