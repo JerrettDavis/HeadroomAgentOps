@@ -17,6 +17,7 @@ from .cli import make_plan
 from .evidence import Evidence
 from .github import GitHub
 from .ledger import Ledger
+from .provider_usage import default_auth_root
 from .publisher import Publisher
 from .reconcile import reconcile_jobs
 from .requalification import requalify_inherited_review
@@ -58,7 +59,7 @@ class Launcher:
         for key in ('harness', 'model', 'concurrency', 'publish'):
             if key in request:
                 config[key] = request[key]
-        if config['harness'] not in ('codex', 'claude', 'copilot'):
+        if config['harness'] not in ('codex', 'claude', 'copilot', 'devin'):
             raise ValueError('Unknown review harness')
         if type(config['concurrency']) is not int or not 1 <= config['concurrency'] <= 4:
             raise ValueError('Concurrency must be an integer from 1 to 4')
@@ -70,7 +71,8 @@ class Launcher:
             # Let the existing CLI select the appropriate default credential directory.
             config['auth_root'] = (os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))
                                    if config['harness'] == 'codex' else
-                                   str(Path.home() / '.claude') if config['harness'] == 'claude' else None)
+                                   str(Path.home() / '.claude') if config['harness'] == 'claude' else
+                                   str(default_auth_root('devin')) if config['harness'] == 'devin' else None)
         return config
 
     def query_numbers(self, query):

@@ -25,6 +25,7 @@ from .settlement import settle_reviews
 from .qualification import qualification_pilot
 from .requalification import requalify_inherited_review
 from .worker import Worker, auth_plan, verify_copilot_scopes
+from .provider_usage import default_auth_root
 from .copilot_relay import NativeRelay, native_credential, retire_relays
 from .allowances import Allowances
 
@@ -57,13 +58,13 @@ def load_config(args):
     if (not isinstance(config['exclude_authors'],list) or
             not all(isinstance(a,str) and a.strip() for a in config['exclude_authors'])):
         raise ValueError('Excluded authors must be a list of GitHub logins')
-    if config['harness'] not in ('codex', 'claude', 'copilot'):
+    if config['harness'] not in ('codex', 'claude', 'copilot', 'devin'):
         raise ValueError('Unknown harness')
     if not isinstance(config['provider_limits'], dict):
         raise ValueError('Provider limits must be a table')
     from .allowances import validate_settings
     for provider, settings in config['provider_limits'].items():
-        if provider not in ('codex', 'claude', 'copilot'):
+        if provider not in ('codex', 'claude', 'copilot', 'devin'):
             raise ValueError('Unknown allowance provider')
         validate_settings(settings)
     for field in ('timeout_seconds', 'packet_budget', 'poll_seconds'):
@@ -74,6 +75,8 @@ def load_config(args):
             config['auth_root'] = os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))
         elif config['harness'] == 'claude':
             config['auth_root'] = str(Path.home() / '.claude')
+        elif config['harness'] == 'devin':
+            config['auth_root'] = str(default_auth_root('devin'))
     return config
 
 
@@ -97,7 +100,7 @@ def parser():
     run.add_argument('--limit', type=int)
     run.add_argument('--review-required', action='store_true')
     run.add_argument('--require-decision', action=argparse.BooleanOptionalAction, default=None)
-    run.add_argument('--harness', choices=['codex', 'claude', 'copilot'])
+    run.add_argument('--harness', choices=['codex', 'claude', 'copilot', 'devin'])
     run.add_argument('--model')
     run.add_argument('--auth-root')
     run.add_argument('--concurrency', type=int)

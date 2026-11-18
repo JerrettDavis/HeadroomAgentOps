@@ -22,6 +22,17 @@ test.beforeEach(async ({page, request, baseURL}) => {
   await expect(page.locator('.markdown-body h1')).toHaveText('Summary');
 });
 
+test('Devin is available as a reviewer and has allowance controls', async ({page}) => {
+  await page.getByRole('button', {name: 'New review', exact: true}).click();
+  await page.locator('#launchharness').selectOption('devin');
+  await expect(page.locator('#launchharness')).toHaveValue('devin');
+  await page.locator('#closewizard').click();
+  const card = page.locator('.allowance-card[data-provider="devin"]');
+  await expect(card.getByRole('heading', {name: 'Devin', exact: true})).toBeVisible();
+  await card.getByText('Review stop point', {exact: true}).click();
+  await expect(card.getByRole('spinbutton', {name: 'Devin stop percentage'})).toBeVisible();
+});
+
 test('provider allowance shows real windows and persists an inclusive stop point', async ({page}) => {
   const card = page.locator('.allowance-card[data-provider="codex"]');
   await expect(card).toContainText('60% used');

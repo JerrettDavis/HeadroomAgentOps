@@ -65,6 +65,22 @@ Readers make bounded account requests without starting model inference:
 - Copilot: account entitlements at GitHub's fixed account endpoint, using the
   configured scoped token or native sign-in. This may expose monthly
   entitlements without a weekly window.
+- Devin: account plan status read from the same service the CLI uses, with the
+  worker's own `credentials.toml` sign-in. Daily/weekly quota and monthly
+  ACU, spend and prompt-credit limits are used when the account reports them.
+  Quota-billed accounts may expose only reset times; set
+  `provider_limits.devin.token_budget` to enforce a measured weekly token
+  budget instead. Consumption is summed from this ledger's own execution
+  records (`input_tokens` + `output_tokens`) since the account's weekly reset,
+  so it reflects only reviews this coordinator ran. Without reported windows
+  or a configured budget, enforcement pauses dispatch (fail closed).
+
+Any provider may additionally set `token_budget`: a measured weekly consumption
+cap summed from this ledger's own execution records (`input_tokens` +
+`output_tokens`), bounded by the provider's reported weekly reset. It enforces
+local efficiency even when account quota is generous or unreported. Providers
+that report no weekly window cannot bound the budget and do not gain a window
+from it.
 
 Provider response shapes can change. Unsupported or malformed data is shown as
 unavailable and cannot silently authorize a review. Allowance status refreshes

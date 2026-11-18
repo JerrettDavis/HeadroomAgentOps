@@ -7,6 +7,8 @@ image = "headroom-agentops-worker:local"
 # model = "your-model"
 # Copy only model auth, never inherited tools, MCP configs or GitHub credentials.
 # auth_root = "C:/Users/you/.codex"
+# Devin uses the credentials.toml written by `devin auth login`; auth_root is
+# %APPDATA%/devin on Windows or ~/.local/share/devin on Linux/macOS.
 # Publish guarded feedback, reviews, maintainer fixes and screened CI actions.
 # Use false (or --no-publish) for an explicitly local-only run. Merging is never allowed.
 publish = true
@@ -19,3 +21,11 @@ poll_seconds = 5
 [provider_limits.codex]
 stop_percent = 80
 enabled = true
+
+# token_budget (any provider) enforces a measured weekly consumption cap from
+# this ledger's own execution records, bounded by the account's weekly quota
+# reset; stop_percent still applies. Required for Devin when the account does
+# not report quota windows.
+# [provider_limits.devin]
+# stop_percent = 25
+# token_budget = 100000000

@@ -127,6 +127,11 @@ def auth_plan(harness, environ, auth_root, copilot_scopes=None):
             raise ValueError('Copilot requires a verified model-only AGENTOPS_COPILOT_TOKEN; '
                              'general GitHub credentials are never forwarded')
         env['COPILOT_GITHUB_TOKEN'] = environ['AGENTOPS_COPILOT_TOKEN']
+    elif harness == 'devin':
+        if auth_root and (Path(auth_root) / 'credentials.toml').is_file():
+            files['credentials.toml'] = str(Path(auth_root) / 'credentials.toml')
+        else:
+            raise ValueError('Devin needs an explicit credentials.toml directory')
     else:
         raise ValueError('Unknown harness')
     return {'files': files, 'env': env}
@@ -460,6 +465,7 @@ class Worker:
         if target.is_symlink() or target.resolve().parent != directory.resolve():
             raise ValueError('Diagnostic output path is not owned')
         text = self.runner(['docker', 'logs', handle['container']], combine_output=True)
-        text = redact(text, collect_secrets((directory.parent / 'auth').glob('*.json')))
+        auth = directory.parent / 'auth'
+        text = redact(text, collect_secrets([*auth.glob('*.json'), *auth.glob('*.toml')]))
         target.write_text(text, encoding='utf8')
         return text[-4000:]

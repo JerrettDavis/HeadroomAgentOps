@@ -3,6 +3,7 @@
 import base64
 import json
 import re
+import tomllib
 from pathlib import Path
 
 
@@ -23,6 +24,11 @@ def collect_secrets(paths):
     for path in paths:
         try:
             walk(json.loads(Path(path).read_text(encoding='utf8')))
+            continue
+        except (OSError, ValueError):
+            pass
+        try:
+            walk(tomllib.loads(Path(path).read_text(encoding='utf8')))
         except (OSError, ValueError):
             continue
     return secrets

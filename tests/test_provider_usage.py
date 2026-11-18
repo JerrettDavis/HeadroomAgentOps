@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agentops.provider_usage import (codex_rpc, parse_codex, parse_claude, parse_copilot,
-                                    read_usage, authentication_fingerprint, staged_fingerprint)
+                                    parse_devin, apply_token_budget, read_usage,
+                                    authentication_fingerprint, staged_fingerprint)
 
 
 class ProviderUsageTests(unittest.TestCase):
@@ -93,6 +94,112 @@ class ProviderUsageTests(unittest.TestCase):
     def test_copilot_unknown_balance_is_not_zero_or_unlimited(self):
         with self.assertRaises(ValueError):
             parse_copilot({'quota_snapshots': {'premium_interactions': {'remaining': None}}})
+
+    def test_devin_weekly_quota_uses_remaining_percent_and_unix_reset(self):
+        result = parse_devin({'userStatus': {'planStatus': {
+            'weeklyQuotaRemainingPercent': 40, 'weeklyQuotaResetAtUnix': '2000000000',
+            'dailyQuotaRemainingPercent': 90, 'dailyQuotaResetAtUnix': '1999999999'}}})
+        self.assertEqual(result['windows'][0]['period'], 'weekly')
+        self.assertEqual(result['windows'][0]['used_percent'], 60)
+        self.assertEqual(result['windows'][0]['resets_at'], 2000000000)
+        self.assertEqual(result['windows'][1]['used_percent'], 10)
+        self.assertFalse(result['blocked'])
+
+    def test_devin_exhausted_quota_and_limits_are_blocked(self):
+        for status in ({'weeklyQuotaRemainingPercent': 0, 'weeklyQuotaResetAtUnix': '2000000000'},
+                       {'acuConsumed': '100', 'acuLimit': '100', 'planEnd': '2033-06-01T00:00:00Z'},
+                       {'dollarsConsumed': '50', 'dollarsLimit': '40', 'planEnd': '2033-06-01'}):
+            with self.subTest(status=status):
+                self.assertTrue(parse_devin({'userStatus': {'planStatus': status}})['blocked'])
+
+    def test_devin_monthly_consumption_is_not_labeled_weekly(self):
+        result = parse_devin({'userStatus': {'planStatus': {
+            'acuConsumed': '25', 'acuLimit': '100', 'planEnd': '2033-06-01T00:00:00Z'}}})
+        self.assertEqual(result['windows'][0]['period'], 'monthly')
+        self.assertEqual(result['windows'][0]['used_percent'], 25)
+
+    def test_devin_unlimited_plan_reports_no_windows(self):
+        result = parse_devin({'userStatus': {'planStatus': {
+            'availablePromptCredits': -1, 'planInfo': {'monthlyPromptCredits': -1}}}})
+        self.assertTrue(result['unlimited'])
+        with self.assertRaises(ValueError):
+            parse_devin({'userStatus': {'planStatus': {}}})
+
+    def test_devin_quota_plan_without_readings_is_not_unlimited(self):
+        # Quota-billed accounts send credit fields as -1 sentinels, which do not
+        # mean unlimited use; without real windows the reading is unavailable.
+        with self.assertRaises(ValueError):
+            parse_devin({'userStatus': {'planStatus': {
+                'availablePromptCredits': -1, 'dailyQuotaResetAtUnix': '1794988800',
+                'planInfo': {'monthlyPromptCredits': -1,
+                             'billingStrategy': 'BILLING_STRATEGY_QUOTA'}}}})
+
+    def test_devin_token_budget_builds_a_measured_weekly_window(self):
+        status = {'userStatus': {'planStatus': {'weeklyQuotaResetAtUnix': '2000000000',
+            'planInfo': {'billingStrategy': 'BILLING_STRATEGY_QUOTA'}}}}
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'credentials.toml').write_text(
+                'windsurf_api_key = "synthetic-account"\n', encoding='utf8')
+            config = {'harness': 'devin', 'auth_root': directory,
+                      'provider_limits': {'devin': {'token_budget': 2000}},
+                      '_consumed_since': lambda since: 500}
+            with patch('agentops.provider_usage.devin_status', return_value=status):
+                result = read_usage(config)
+        [window] = result['windows']
+        self.assertEqual(window['period'], 'weekly')
+        self.assertEqual(window['resets_at'], 2000000000)
+        self.assertEqual(window['used_percent'], 25)
+        self.assertFalse(result['blocked'])
+
+    def test_devin_token_budget_blocks_at_full_consumption_and_fails_closed_without(self):
+        status = {'userStatus': {'planStatus': {'weeklyQuotaResetAtUnix': '2000000000'}}}
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'credentials.toml').write_text(
+                'windsurf_api_key = "synthetic-account"\n', encoding='utf8')
+            config = {'harness': 'devin', 'auth_root': directory,
+                      'provider_limits': {'devin': {'token_budget': 2000}},
+                      '_consumed_since': lambda since: 2500}
+            with patch('agentops.provider_usage.devin_status', return_value=status):
+                result = read_usage(config)
+            self.assertTrue(result['blocked'])
+            self.assertEqual(result['windows'][0]['used_percent'], 125)
+            del config['_consumed_since'], config['provider_limits']
+            with patch('agentops.provider_usage.devin_status', return_value=status):
+                with self.assertRaises(ValueError):
+                    read_usage(config)
+
+    def test_token_budget_uses_the_providers_own_weekly_reset(self):
+        windows = [{'id': 'w', 'label': 'w', 'period': 'weekly', 'window_minutes': 10080,
+                    'used_percent': 10, 'resets_at': 2000000000}]
+        config = {'provider_limits': {'codex': {'token_budget': 1000}},
+                  '_consumed_since': lambda since: 500}
+        result = apply_token_budget(config, 'codex', {'windows': list(windows), 'blocked': False})
+        self.assertEqual(len(result['windows']), 2)
+        self.assertEqual(result['windows'][1]['used_percent'], 50)
+        self.assertEqual(result['windows'][1]['resets_at'], 2000000000)
+        # Providers reporting only monthly or short windows cannot bound a weekly budget.
+        monthly = [{'id': 'm', 'label': 'm', 'period': 'monthly', 'window_minutes': 43200,
+                    'used_percent': 10, 'resets_at': 2000000000}]
+        self.assertEqual(len(apply_token_budget(config, 'codex',
+                                                {'windows': monthly})['windows']), 1)
+
+    def test_devin_usage_reads_the_staged_credentials_account(self):
+        from agentops.worker import auth_plan
+        with tempfile.TemporaryDirectory() as directory:
+            credentials = ('windsurf_api_key = "synthetic-account-A"\n'
+                           'api_server_url = "https://synthetic.example.test"\n')
+            (Path(directory) / 'credentials.toml').write_text(credentials, encoding='utf8')
+            with patch('agentops.provider_usage.devin_status') as status:
+                status.return_value = {'userStatus': {'planStatus': {
+                    'weeklyQuotaRemainingPercent': 40, 'weeklyQuotaResetAtUnix': '2000000000'}}}
+                result = read_usage({'harness': 'devin', 'auth_root': directory})
+            self.assertEqual(status.call_args.args, ('https://synthetic.example.test', 'synthetic-account-A'))
+            auth = auth_plan('devin', {}, directory)
+            fingerprint = staged_fingerprint('devin',
+                {name: Path(source).read_bytes() for name, source in auth['files'].items()}, auth['env'])
+            self.assertEqual(result['auth_fingerprint'], fingerprint)
+            self.assertEqual(result['auth_fingerprint'], authentication_fingerprint(
+                {'harness': 'devin', 'auth_root': directory}))
 
     def test_codex_protocol_initializes_and_reads_without_creating_a_thread(self):
         script = '''import json,sys

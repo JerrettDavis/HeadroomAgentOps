@@ -10,7 +10,8 @@ import sys
 import time
 from pathlib import Path
 
-from agentops.harness import Harness, RESULT_SCHEMA, validate_result, usage_from_events, response_from_events
+from agentops.harness import (Harness, RESULT_SCHEMA, validate_result, usage_from_events,
+                              response_from_events, usage_from_devin_export, response_from_devin_export)
 from agentops.redaction import collect_secrets, redact
 
 
@@ -29,7 +30,8 @@ def run():
     (output / 'schema.json').write_text(json.dumps(strict_schema))
     env = {**os.environ, **json.loads(Path('/job/auth/model-env.json').read_text())}
     for name, destination in [('auth.json', Path('/home/node/.codex/auth.json')),
-                               ('.credentials.json', Path('/home/node/.claude/.credentials.json'))]:
+                               ('.credentials.json', Path('/home/node/.claude/.credentials.json')),
+                               ('credentials.toml', Path('/home/node/.local/share/devin/credentials.toml'))]:
         source = Path('/job/auth') / name
         if source.exists():
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -45,10 +47,11 @@ def run():
         except subprocess.TimeoutExpired:
             completed = subprocess.CompletedProcess(args, 124)
             stderr.write('Worker session time budget exhausted.\n')
-    auth_paths = [*Path('/job/auth').glob('*.json'), Path('/home/node/.codex/auth.json'),
-                  Path('/home/node/.claude/.credentials.json')]
+    auth_paths = [*Path('/job/auth').glob('*.json'), *Path('/job/auth').glob('*.toml'),
+                  Path('/home/node/.codex/auth.json'), Path('/home/node/.claude/.credentials.json'),
+                  Path('/home/node/.local/share/devin/credentials.toml')]
     secrets = collect_secrets(auth_paths)
-    for filename in ('session.jsonl', 'stderr.log', 'result.json', 'final.json'):
+    for filename in ('session.jsonl', 'stderr.log', 'result.json', 'final.json', 'export.json'):
         retained = output / filename
         if retained.is_symlink():
             raise ValueError('Worker output may not be a symbolic link')
@@ -65,6 +68,8 @@ def run():
     usage = usage_from_events(assignment['harness'], events)
     if assignment['harness'] == 'copilot' and (output / 'usage.json').is_file():
         usage = json.loads((output / 'usage.json').read_text())
+    elif assignment['harness'] == 'devin' and (output / 'export.json').is_file():
+        usage = usage_from_devin_export(output / 'export.json')
     (output / 'execution.json').write_text(json.dumps({
         'harness': assignment['harness'], 'version': version.stdout.strip(),
         'model': assignment.get('model'), 'exit_code': completed.returncode,
@@ -79,6 +84,8 @@ def run():
         candidate = output / 'final.json'
         if candidate.exists():
             data = json.loads(candidate.read_text())
+        elif assignment['harness'] == 'devin' and (output / 'export.json').is_file():
+            data = response_from_devin_export(output / 'export.json')
         else:
             data = response_from_events(assignment['harness'], events)
         validate_result(data, assignment)

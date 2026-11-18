@@ -13,10 +13,15 @@ import shutil
 import subprocess
 import threading
 import time
+import tomllib
 import urllib.request
 
 
-PROVIDERS = ('codex', 'claude', 'copilot')
+PROVIDERS = ('codex', 'claude', 'copilot', 'devin')
+
+# The status service validates CLI identity metadata; keep in step with the
+# worker image's pinned Devin release.
+DEVIN_CLI_VERSION = '3000.13.4'
 
 
 def staged_fingerprint(provider, files, env):
@@ -41,13 +46,20 @@ def authentication_fingerprint(config):
         {name: Path(source).read_bytes() for name, source in auth['files'].items()}, auth['env'])
 
 
-def auth_root(config):
-    provider = config['harness']
-    if config.get('auth_root'):
-        return Path(config['auth_root'])
+def default_auth_root(provider):
+    if provider == 'devin':
+        if os.name == 'nt':
+            return Path(os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'devin'
+        return Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share') / 'devin'
     variable, folder = {'codex': ('CODEX_HOME', '.codex'), 'claude': ('CLAUDE_CONFIG_DIR', '.claude'),
                         'copilot': ('COPILOT_HOME', '.copilot')}[provider]
     return Path(os.environ.get(variable) or Path.home() / folder)
+
+
+def auth_root(config):
+    if config.get('auth_root'):
+        return Path(config['auth_root'])
+    return default_auth_root(config['harness'])
 
 
 def subscription_policy_error(config):
@@ -71,8 +83,8 @@ def credential_scope(config):
     identity = [provider, str(root), str(config.get('copilot_account') or ''),
                 str(config.get('copilot_cli_root') or ''), bool(config.get('copilot_native')),
                 config.get('_native_credential_fingerprint')]
-    filename = 'auth.json' if provider == 'codex' else '.credentials.json'
-    if provider != 'copilot':
+    filename = {'codex': 'auth.json', 'claude': '.credentials.json', 'devin': 'credentials.toml'}.get(provider)
+    if filename:
         try:
             with (root / filename).open('rb') as stream:
                 identity.append(hashlib.sha256(stream.read(1024 * 1024)).hexdigest())
@@ -80,7 +92,7 @@ def credential_scope(config):
             identity.append('unavailable')
     for name in {'codex': ('CODEX_API_KEY', 'OPENAI_API_KEY'),
                  'claude': ('CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'),
-                 'copilot': ('AGENTOPS_COPILOT_TOKEN',)}[provider]:
+                 'copilot': ('AGENTOPS_COPILOT_TOKEN',), 'devin': ()}[provider]:
         identity.append(hashlib.sha256(os.environ.get(name, '').encode()).hexdigest())
     return hashlib.sha256(json.dumps(identity).encode()).hexdigest()
 
@@ -145,6 +157,88 @@ def parse_claude(raw):
     if not windows:
         raise ValueError('Claude did not report allowance windows')
     return {'source': 'Claude account usage', 'blocked': False, 'windows': windows}
+
+
+def quantity(value):
+    """Connect-JSON encodes 64-bit integers as strings; coerce before validation."""
+    if isinstance(value, str) and re.fullmatch(r'-?\d+', value):
+        return int(value)
+    return value
+
+
+def apply_token_budget(config, provider, result, reset=None):
+    """Add a measured weekly consumption window when a token budget is set.
+
+    Consumption is summed by the caller from this coordinator's own execution
+    records; the window ends at the provider's weekly reset so local spend is
+    bounded by the same period as account quota.
+    """
+    budget = (config.get('provider_limits') or {}).get(provider, {}).get('token_budget')
+    consumed_since = config.get('_consumed_since')
+    if reset is None:
+        reset = next((w['resets_at'] for w in result.get('windows', [])
+                      if w['period'] == 'weekly'), None)
+    if not (budget and consumed_since and reset):
+        return result
+    budget = number(budget)
+    consumed = consumed_since(number(reset) - 604800)
+    result['windows'].append(window(f'{provider}-tokens', 'Weekly token budget (measured)',
+                                    consumed / budget * 100, reset, 10080, 'weekly'))
+    result['blocked'] = result.get('blocked') or consumed >= budget
+    return result
+
+
+def parse_devin(raw):
+    status = (raw.get('userStatus') or {}).get('planStatus') or {}
+    plan = status.get('planInfo') or {}
+    windows, blocked = [], False
+    reported = {'weekly': ('weeklyQuotaRemainingPercent', 'weeklyQuotaResetAtUnix', 'Weekly quota', 10080),
+                'daily': ('dailyQuotaRemainingPercent', 'dailyQuotaResetAtUnix', 'Daily quota', 1440)}
+    for identity, (remaining_key, reset_key, label, minutes) in reported.items():
+        remaining, reset = quantity(status.get(remaining_key)), quantity(status.get(reset_key))
+        if remaining is None or reset is None:
+            continue
+        blocked = blocked or number(remaining) <= 0
+        windows.append(window(identity, label, max(0.0, 100 - number(remaining)), reset, minutes))
+    for identity, consumed_key, limit_key, label in (
+            ('acu', 'acuConsumed', 'acuLimit', 'Monthly ACU consumption'),
+            ('dollars', 'dollarsConsumed', 'dollarsLimit', 'Monthly spend limit')):
+        limit = quantity(status.get(limit_key))
+        if not limit or number(limit) <= 0:
+            continue
+        consumed = number(quantity(status.get(consumed_key)) or 0)
+        blocked = blocked or consumed >= number(limit)
+        windows.append(window(identity, label, consumed / number(limit) * 100,
+                              status.get('planEnd'), 43200, 'monthly'))
+    available, monthly = quantity(status.get('availablePromptCredits')), quantity(plan.get('monthlyPromptCredits'))
+    if (type(monthly) is int and monthly > 0 and type(available) in (int, float)):
+        blocked = blocked or available <= 0
+        windows.append(window('prompt_credits', 'Monthly prompt credits',
+                              max(0.0, monthly - available) / monthly * 100,
+                              status.get('planEnd'), 43200, 'monthly'))
+    quota_billed = plan.get('billingStrategy') == 'BILLING_STRATEGY_QUOTA'
+    unlimited = not windows and (available == -1 or monthly == -1) and not quota_billed
+    if not windows and not unlimited:
+        raise ValueError('Devin did not report allowance windows')
+    return {'source': 'Devin account plan status', 'blocked': blocked,
+            'windows': windows, 'unlimited': unlimited}
+
+
+def devin_status(base_url, api_key):
+    """Bounded Connect-JSON read of the same plan status the CLI displays."""
+    body = json.dumps({'metadata': {'api_key': api_key, 'ide_name': 'devin',
+                                    'ide_version': DEVIN_CLI_VERSION,
+                                    'extension_name': 'devin',
+                                    'extension_version': DEVIN_CLI_VERSION}}).encode()
+    request = urllib.request.Request(
+        base_url.rstrip('/') + '/exa.seat_management_pb.SeatManagementService/GetUserStatus',
+        data=body, method='POST', headers={'Content-Type': 'application/json'})
+    opener = urllib.request.build_opener(NoRedirect())
+    with opener.open(request, timeout=15) as response:
+        content = response.read(4 * 1024 * 1024 + 1)
+    if len(content) > 4 * 1024 * 1024:
+        raise ValueError('Allowance response too large')
+    return json.loads(content)
 
 
 def parse_copilot(raw):
@@ -297,7 +391,7 @@ def read_usage(config):
         # the file snapshot, including an A->B->A switch during the RPC.
         if raw.get('accountId') != account:
             raise ValueError('Codex allowance account does not match worker authentication')
-        result = parse_codex(raw)
+        result = apply_token_budget(config, provider, parse_codex(raw))
         fingerprint = staged_fingerprint(provider, {'auth.json': content}, {})
     elif provider == 'claude':
         if os.environ.get('ANTHROPIC_API_KEY'):
@@ -306,8 +400,9 @@ def read_usage(config):
         credential = json.loads(content).get('claudeAiOauth', {}).get('accessToken')
         if not credential:
             raise ValueError('Claude subscription sign-in required')
-        result = parse_claude(account_json('https://api.anthropic.com/api/oauth/usage', {
-            'Authorization': 'Bearer ' + credential, 'anthropic-beta': 'oauth-2025-04-20'}))
+        result = apply_token_budget(config, provider, parse_claude(
+            account_json('https://api.anthropic.com/api/oauth/usage', {
+                'Authorization': 'Bearer ' + credential, 'anthropic-beta': 'oauth-2025-04-20'})))
         fingerprint = staged_fingerprint(provider, {'.credentials.json': content}, {})
     elif provider == 'copilot':
         if config.get('copilot_native'):
@@ -324,9 +419,31 @@ def read_usage(config):
             if not credential:
                 raise ValueError('Copilot sign-in required')
             fingerprint = staged_fingerprint(provider, {}, {'COPILOT_GITHUB_TOKEN': credential})
-        result = parse_copilot(account_json('https://api.github.com/copilot_internal/user', {
-            'Authorization': 'token ' + credential, 'Accept': 'application/json',
-            'User-Agent': 'HeadroomAgentOps'}))
+        result = apply_token_budget(config, provider, parse_copilot(
+            account_json('https://api.github.com/copilot_internal/user', {
+                'Authorization': 'token ' + credential, 'Accept': 'application/json',
+                'User-Agent': 'HeadroomAgentOps'})))
+    elif provider == 'devin':
+        try:
+            content = (auth_root(config) / 'credentials.toml').read_bytes()
+            stored = tomllib.loads(content.decode('utf8'))
+        except (OSError, ValueError):
+            raise ValueError('Devin sign-in required') from None
+        credential = stored.get('windsurf_api_key')
+        if not isinstance(credential, str) or not credential:
+            raise ValueError('Devin sign-in required')
+        raw = devin_status(stored.get('api_server_url') or 'https://server.codeium.com', credential)
+        try:
+            result = parse_devin(raw)
+        except ValueError:
+            result = {'source': 'Devin account plan status', 'blocked': False,
+                      'windows': [], 'unlimited': False}
+        plan = (raw.get('userStatus') or {}).get('planStatus') or {}
+        result = apply_token_budget(config, provider, result,
+                                    quantity(plan.get('weeklyQuotaResetAtUnix')))
+        if not result['windows'] and not result.get('unlimited'):
+            raise ValueError('Devin did not report allowance windows')
+        fingerprint = staged_fingerprint(provider, {'credentials.toml': content}, {})
     else:
         raise ValueError('Unknown allowance provider')
     return {**result, 'auth_fingerprint': fingerprint}
