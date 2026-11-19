@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9
+FROM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
 ARG SOURCE_URL
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.source=$SOURCE_URL \
