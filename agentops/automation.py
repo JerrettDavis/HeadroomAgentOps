@@ -4,6 +4,9 @@ import json
 import threading
 import time
 
+from .evidence import Evidence
+from .material_diff import compare_review_diff, hunk_coordinates
+
 
 class AutoReview:
     def __init__(self, launcher):
@@ -60,6 +63,70 @@ class AutoReview:
         with self.lock:
             return {**{key: value for key, value in self.data.items() if key != 'seen'},
                     'settings': dict(self.data['settings']), 'error': self.error}
+
+    def material_update(self, pr, prior, main_sha):
+        """Persist scheduling notes, keeping the last actual analysis as baseline.
+
+        Manual launches bypass this automatic-only filter and use --force-fresh.
+        A skipped update never becomes a reviewed or approved ledger job.
+        """
+        notes = self.data.setdefault('review_notes', {})
+        evidence = Evidence(self.launcher.root / 'evidence')
+        candidates = sorted(prior, key=lambda j: j.get('created', 0), reverse=True)
+        for job in candidates:
+            reference = (job.get('result') or {}).get('evidence_record')
+            if not reference or job.get('state') not in (
+                    'ready', 'held', 'reviewed', 'awaiting_ci', 'needs_followup', 'stale'):
+                continue
+            try:
+                proof = evidence.get(reference['sha256'])
+                previous = evidence.get(proof['reviewed_pr_evidence']['sha256'])
+                if (proof['number'] != pr['number'] or previous['number'] != pr['number'] or
+                        proof['head_sha'] != job['head_sha'] or
+                        previous['head_sha'] != job['head_sha']):
+                    continue
+                current = self.launcher.github.pull(pr['number'])
+                if current['head_sha'] != pr['head_sha']:
+                    return {'material': True, 'reason': 'head_changed_during_comparison'}
+                if not isinstance(previous.get('files'), list) or not isinstance(current.get('files'), list):
+                    return {'material': True, 'reason': 'incomplete_diff'}
+                # Fetch full content only for changed Python/manifests. Patch-only
+                # whitespace guesses can hide literals and significant indentation.
+                previous = {**previous, 'files': [dict(f) for f in previous.get('files', [])]}
+                current = {**current, 'files': [dict(f) for f in current.get('files', [])]}
+                old_files = {f['filename']: f for f in previous['files']}
+                for file in current['files']:
+                    old_file = old_files.get(file['filename'])
+                    if old_file and hunk_coordinates(old_file) != hunk_coordinates(file):
+                        for original_pr, item in ((previous, old_file), (current, file)):
+                            try:
+                                content = self.launcher.github.review_base_content(original_pr, item)
+                                if isinstance(content, str):
+                                    item['base_content'] = content
+                            except (RuntimeError, OSError, ValueError, KeyError):
+                                pass
+                    if (old_file and old_file.get('patch') != file.get('patch') and
+                            (file['filename'].endswith('.py') or
+                             file['filename'].split('/')[-1] in ('package.json', 'pyproject.toml'))):
+                        for item in (old_file, file):
+                            if item.get('sha'):
+                                try:
+                                    content = self.launcher.github.review_blob(item['sha'])
+                                    if isinstance(content, str):
+                                        item['content'] = content
+                                except (RuntimeError, OSError, ValueError, KeyError):
+                                    pass
+                decision = compare_review_diff(previous, current)
+                record = {**decision, 'head_sha': pr['head_sha'], 'main_sha': main_sha,
+                          'source_job': job['id'], 'prior_review': reference,
+                          'current_pr': evidence.put(current), 'recorded_at': time.time(),
+                          'scope': 'scheduling_only_no_approval'}
+                notes[str(pr['number'])] = {**record, 'evidence': evidence.put(record)}
+                return record
+            except (OSError, ValueError, KeyError, TypeError):
+                # An unavailable baseline must never suppress a needed review.
+                continue
+        return {'material': True, 'reason': 'no_verified_prior_review'}
 
     def tick(self, background=False):
         # Slow GitHub requests must not block dashboard status or toggle changes.
@@ -159,6 +226,15 @@ class AutoReview:
                         continue
                 if (event and settings[event] and pr['author'].lower() not in excluded
                         and (not settings['non_draft_only'] or not pr.get('draft', True))):
+                    if prior:
+                        decision = self.material_update(pr, prior, snapshot['main_sha'])
+                        if not decision['material']:
+                            current[key]['pending'] = None
+                            attention.append({'number': pr['number'], 'head_sha': head,
+                                              'state': 'review_reused',
+                                              'reasons': [decision['reason']],
+                                              'source_job': decision['source_job']})
+                            continue
                     selected.append(pr['number'])
             self.data.update(seen=current, initialized=True, last_poll=time.time(),
                              attention=attention, eligible=len(selected))

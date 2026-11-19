@@ -181,7 +181,14 @@ def stage_review_context(directory, job, pr, evidence):
     reusable = (previous['head_sha'] == pr['head_sha'] and
                 previous.get('base_sha') == pr.get('base_sha') and
                 proof['main_sha'] == job['main_sha'])
+    previous_files = {f['filename']: f for f in previous.get('files', [])}
+    covered = set(proof.get('coverage', {}).get('files', []))
+    unchanged = sorted(f['filename'] for f in pr.get('files', [])
+                       if f['filename'] in covered and
+                       re.fullmatch(r'[a-f0-9]{40,64}', f.get('sha', '')) and
+                       previous_files.get(f['filename'], {}).get('sha') == f['sha'])
     record = {**context, 'coverage_reusable': reusable,
+              'unchanged_source_files': unchanged,
               'unchanged_head_files':(sorted(set(proof.get('coverage',{}).get('files',[])) &
                                             {f['filename'] for f in pr.get('files',[])})
                                       if previous['head_sha']==pr['head_sha'] else []),
@@ -189,6 +196,18 @@ def stage_review_context(directory, job, pr, evidence):
               'previous_main_sha': proof['main_sha']}
     (directory / 'input' / 'previous-review.json').write_text(canonical(proof), encoding='utf8')
     (directory / 'input' / 'previous-review-context.json').write_text(canonical(record), encoding='utf8')
+    notes = {key: proof[key] for key in (
+        'number', 'head_sha', 'main_sha', 'summary', 'findings', 'qualification_limits',
+        'source_review', 'coverage', 'actions', 'outcome') if key in proof}
+    notes['scope'] = 'prior_analysis_not_current_approval_or_test_evidence'
+    (directory / 'input' / 'previous-review-notes.json').write_text(canonical(notes), encoding='utf8')
+    delta = {'previous_head_sha': previous['head_sha'], 'head_sha': pr['head_sha'],
+             'files': [f for f in pr.get('files', []) if f['filename'] not in unchanged],
+             'removed_paths': sorted(previous_files.keys() -
+                                     {f['filename'] for f in pr.get('files', [])}),
+             'unchanged_source_files': unchanged,
+             'requires_target_interaction_check': proof['main_sha'] != job['main_sha']}
+    (directory / 'input' / 'review-delta.json').write_text(canonical(delta), encoding='utf8')
     return True
 
 
@@ -263,11 +282,16 @@ class Worker:
         assignment['prompt'] = (
             'Review ONLY the PR assigned in /job/input/packet.json. '
             'Read each required evidence artifact once; use targeted lookups afterward. '
-            'If /job/input/previous-review-context.json exists, read it and previous-review.json once. '
+            'If /job/input/previous-review-context.json exists, read it, previous-review-notes.json, '
+            'and review-delta.json once. The full previous-review.json is available for targeted lookups. '
             'Preserve unresolved prior findings and focus work on changed source, discussion, or CI. '
             'Reuse source-file coverage only when coverage_reusable is true and record its provenance. '
             'Files in unchanged_head_files were already inspected at this identical head: reuse their '
             'source-reading coverage, while separately checking changed target/main interactions. '
+            'Files in unchanged_source_files have verified identical Git blobs across revisions: '
+            'reuse their source-reading coverage and focus source ingestion on review-delta.json. '
+            'Check changed target/main interactions and preserve unresolved findings; identical blobs '
+            'do not grant current CI qualification, approval, or passing-test evidence. '
             'Do not rerun unchanged tests merely to restate a known hold. Earlier-head tests are context, '
             'not passing evidence for a new head; distinguish reused evidence from newly executed tests. '
             'If assignment.result.review_task is qualification, the prior source review is not a completed '

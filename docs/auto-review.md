@@ -4,7 +4,12 @@ Start the dashboard with `python -m agentops panel` and open **Automatic reviews
 from the header icon:
 
 - **Review new PRs automatically** schedules newly observed PRs and unreviewed required-review backlog.
-- **Review updated PRs automatically** schedules a PR when its head commit changes.
+- **Review updated PRs automatically** checks the PR contribution when its head commit changes.
+  With verified prior analysis, unchanged contributions (including main updates
+  and mechanical conflict resolutions) and dependency-only updates skip agent work.
+  Hunk line numbers may move; function anchors and surrounding context must match.
+  Python formatting is compared using complete hash-verified source tokens, preserving
+  strings, indentation and logical newlines. Missing or truncated evidence requires review.
   CI and discussion updates are rechecked against saved analysis; they do not
   automatically start an unlimited sequence of fresh reviews.
 - **Only review non-draft PRs** keeps draft PRs waiting until they become ready.
@@ -18,6 +23,22 @@ configured state directory. Restarting the dashboard preserves them. Turning bot
 triggers off pauses observation; changes detected after resuming can be reviewed.
 A pending event remains available while its trigger is disabled. Closed PRs are
 removed on the next complete inventory. Incomplete inventories never dispatch work.
+
+`review_notes` in `auto-review.json` records the current head, source review job,
+comparison reason and immutable evidence references across sessions. A skipped
+update never grants approval, test coverage or CI qualification to the new head.
+The baseline remains the last actual analysis, so multiple small updates are
+compared cumulatively. Existing unresolved findings remain in the prior evidence.
+Dependency-only handling covers modified standard lockfiles and changes confined
+to dependency fields in `package.json` and `pyproject.toml`; scripts, build settings,
+renames, removals and mixed code updates require review.
+
+Use **New Review** to explicitly re-review a PR regardless of automatic skips.
+Manual launches use `--force-fresh`; CLI runs can also pass that flag. For material
+updates, workers receive `review-delta.json` and `previous-review-notes.json` and
+reuse source-reading coverage only for verified identical Git blobs. Full prior
+evidence remains available for targeted lookups. Main interactions, unresolved
+findings and current validation still require attention.
 
 Queue discovery completes one paginated traversal without requiring the whole
 repository to remain unchanged for a second pass. Preview and launch independently

@@ -7,9 +7,55 @@ from unittest.mock import Mock, patch
 from agentops.automation import AutoReview
 from agentops.launch import Launcher
 from agentops.cli import DEFAULTS
+from agentops.evidence import Evidence
 
 
 class AutomationTests(unittest.TestCase):
+    def test_equivalent_head_update_skips_worker_and_persists_notes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            source = {'number': 1, 'head_sha': 'old', 'base_sha': 'base',
+                      'files': [{'filename': 'a.py', 'status': 'modified',
+                                 'patch': '@@ -1 +1 @@\n-a()\n+b()'}]}
+            evidence = Evidence(Path(directory) / 'evidence')
+            proof = {'number': 1, 'head_sha': 'old',
+                     'reviewed_pr_evidence': evidence.put(source)}
+            launcher.ledger.jobs.return_value = [{'id': 'prior', 'repo': 'o/r',
+                'number': 1, 'head_sha': 'old', 'state': 'stale',
+                'result': {'evidence_record': evidence.put(proof)}}]
+            launcher.github.snapshot.return_value = self.snapshot((1, 'old', False, 'user'))
+            auto.tick()
+            launcher.github.snapshot.return_value = self.snapshot((1, 'new', False, 'user'))
+            launcher.github.pull.return_value = {**source, 'head_sha': 'new'}
+            auto.tick()
+            launcher.launch.assert_not_called()
+            notes = auto.status()['review_notes']['1']
+            self.assertEqual(notes['reason'], 'equivalent_contribution')
+            self.assertEqual(notes['source_job'], 'prior')
+            self.assertEqual(AutoReview(launcher).status()['review_notes']['1'], notes)
+            launcher.github.pull.return_value = {**source, 'head_sha': 'new',
+                'files': [{**source['files'][0], 'patch': '@@ -8 +8 @@\n-a()\n+b()'}]}
+            launcher.github.review_base_content.side_effect = lambda value, file: (
+                'a()\n' if value['head_sha'] == 'old' else 'header\n' * 7 + 'a()\n')
+            decision = auto.material_update(launcher.github.snapshot.return_value['prs'][0],
+                                           launcher.ledger.jobs.return_value, 'm' * 40)
+            self.assertFalse(decision['material'])
+            launcher.github.pull.return_value = {**source, 'head_sha': 'new', 'base_ref': 'release'}
+            decision = auto.material_update(launcher.github.snapshot.return_value['prs'][0],
+                                           launcher.ledger.jobs.return_value, 'm' * 40)
+            self.assertTrue(decision['material'])
+
+    def test_material_update_still_launches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot((1, 'old', False, 'user'))
+            auto.tick()
+            launcher.github.snapshot.return_value = self.snapshot((1, 'new', False, 'user'))
+            auto.tick()
+            launcher.launch.assert_called_once()
+
     def test_slow_reconciliation_does_not_block_inventory_or_new_pr_dispatch(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)

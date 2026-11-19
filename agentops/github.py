@@ -103,6 +103,43 @@ class GitHub:
     def main_sha(self):
         return self.request('GET', f'repos/{self.repo}/commits/main')['sha']
 
+    def review_blob(self, sha):
+        """Read bounded UTF-8 source pinned to a verified Git blob identity."""
+        if not isinstance(sha, str) or not re.fullmatch('[a-f0-9]{40}', sha):
+            raise ValueError('Invalid review blob SHA')
+        key = ('review_blob', sha)
+        if key not in self._source_cache:
+            value = self.request('GET', f'repos/{self.repo}/git/blobs/{sha}')
+            if (value.get('sha') != sha or value.get('encoding') != 'base64' or
+                    len(value.get('content', '')) > 1500000):
+                raise ValueError('Incomplete or oversized review blob')
+            data = base64.b64decode(value['content'])
+            if len(data) > 1048576:
+                raise ValueError('Oversized review blob')
+            actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+            if actual != sha:
+                raise ValueError('Review blob hash mismatch')
+            self._source_cache[key] = data.decode('utf8')
+        return self._source_cache[key]
+
+    def review_base_content(self, pr, file):
+        base, head = pr.get('base_sha', ''), pr.get('head_sha', '')
+        if not all(re.fullmatch('[a-f0-9]{40}', value) for value in (base, head)):
+            raise ValueError('Invalid review revision SHA')
+        key = ('review_merge_base', base, head)
+        if key not in self._source_cache:
+            comparison = self.request('GET', f'repos/{self.repo}/compare/{base}...{head}')
+            merge_base = comparison['merge_base_commit']['sha']
+            if not re.fullmatch('[a-f0-9]{40}', merge_base):
+                raise ValueError('Invalid review merge base SHA')
+            self._source_cache[key] = merge_base
+        reference = self._source_cache[key]
+        path = urllib.parse.quote(file['filename'], safe='/')
+        entry = self.request('GET', f'repos/{self.repo}/contents/{path}?ref={reference}')
+        if not isinstance(entry, dict) or entry.get('type') != 'file':
+            raise ValueError('Missing base file')
+        return self.review_blob(entry['sha'])
+
     def review_workflow_baseline(self,current,main_sha):
         compare=self.request('GET',f'repos/{self.repo}/compare/{main_sha}...{current["head_sha"]}')
         base=compare['merge_base_commit']['sha']

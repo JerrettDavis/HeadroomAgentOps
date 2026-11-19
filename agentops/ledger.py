@@ -189,7 +189,7 @@ class Ledger:
         """Latest completed analysis, including an older head, for bounded follow-up context."""
         with self.connect() as db:
             row = db.execute("SELECT * FROM jobs WHERE repo=? AND number=? AND id<>? "
-                             "AND state IN ('ready','held','reviewed','awaiting_ci','needs_followup') "
+                               "AND state IN ('ready','held','reviewed','awaiting_ci','needs_followup','stale') "
                              "AND result IS NOT NULL ORDER BY created DESC,id DESC LIMIT 1",
                              (job['repo'], job['number'], job['id'])).fetchone()
             return self._decode(row) if row else None

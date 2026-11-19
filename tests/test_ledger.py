@@ -32,6 +32,15 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.enqueue(), first)
         self.assertNotEqual(self.enqueue(head='c' * 40), first)
 
+    def test_invalidated_analysis_remains_available_as_context_only(self):
+        previous = self.enqueue()
+        self.db.claim('one', 2)
+        self.db.finish(previous, 'one', 'reviewed', {'evidence_record': {'sha256': 'e' * 64}})
+        self.db.invalidate('o/r', 'a' * 40, {1: 'c' * 40})
+        current = self.db.job(self.enqueue(head='c' * 40))
+        self.assertEqual(self.db.context_review(current)['id'], previous)
+        self.assertEqual(self.db.prior_reviews(current), [])
+
     def test_competing_connections_honor_global_concurrency(self):
         for number in range(1, 9):
             self.enqueue(number)

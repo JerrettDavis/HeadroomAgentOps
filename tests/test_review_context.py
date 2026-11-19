@@ -7,6 +7,30 @@ from agentops.worker import stage_review_context
 
 
 class ReviewContextTests(unittest.TestCase):
+    def test_new_head_stages_delta_and_reuses_identical_blob_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'input').mkdir()
+            evidence = Evidence(root / 'evidence')
+            previous = {'number': 1, 'head_sha': 'old', 'files': [
+                {'filename': 'a.py', 'sha': 'a' * 40, 'patch': '-a\n+b'},
+                {'filename': 'b.py', 'sha': 'b' * 40, 'patch': '-a\n+b'}]}
+            proof = {'number': 1, 'head_sha': 'old', 'main_sha': 'main',
+                     'reviewed_pr_evidence': evidence.put(previous),
+                     'coverage': {'files': ['a.py', 'b.py']},
+                     'findings': [{'message': 'Preserve this unresolved issue'}]}
+            job = {'number': 1, 'main_sha': 'newmain',
+                   'prior_review_context': {'result_evidence': evidence.put(proof)}}
+            current = {**previous, 'head_sha': 'new', 'files': [previous['files'][0],
+                {**previous['files'][1], 'sha': 'c' * 40, 'patch': '-a\n+c'}]}
+            stage_review_context(root, job, current, evidence)
+            record = json.loads((root / 'input/previous-review-context.json').read_text())
+            self.assertEqual(record['unchanged_source_files'], ['a.py'])
+            delta = json.loads((root / 'input/review-delta.json').read_text())
+            self.assertEqual([f['filename'] for f in delta['files']], ['b.py'])
+            notes = json.loads((root / 'input/previous-review-notes.json').read_text())
+            self.assertEqual(notes['findings'], proof['findings'])
+
     def test_prior_source_coverage_reusable_only_for_identical_head_base_and_main(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
