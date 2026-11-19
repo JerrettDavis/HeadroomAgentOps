@@ -65,6 +65,9 @@ hid a head that has not been analysed, the updated-PR trigger rechecks it agains
 actual prior analysis, even when that head was already inventoried. Equivalent
 diffs retain a verified skip receipt bound to head, target, repository, inventory
 update time and main; materially changed contributions are queued normally.
+An already-analysed identical head in the same source repository and target
+branch reuses source analysis without fetching full PR discussion again. This
+scheduling shortcut never reuses approval or target/main qualification.
 
 The ALL dashboard view includes historical PRs and closed PRs. Its historical
 outcome fraction is not live review coverage. Queued jobs from stopped sessions

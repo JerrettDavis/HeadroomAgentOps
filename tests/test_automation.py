@@ -270,6 +270,20 @@ class AutomationTests(unittest.TestCase):
             self.assertFalse(auto.material_update(pr, [], 'm' * 40)['material'])
             self.assertTrue(auto.material_update({**pr, 'base_ref': 'release'}, [], 'm' * 40)['material'])
 
+    def test_stopped_duplicate_of_analysed_head_reuses_without_full_pr_ingestion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            pr = {**self.snapshot((2, 'a', False, 'user'))['prs'][0],
+                  'base_ref': 'main', 'head_repo': 'o/fork', 'files': []}
+            proof = {'number': 2, 'head_sha': 'a', 'reviewed_pr_evidence': evidence.put(pr)}
+            prior = [{'id': 'analysis', 'state': 'stale', 'head_sha': 'a',
+                      'result': {'evidence_record': evidence.put(proof)}}]
+            decision = auto.material_update(pr, prior, 'm' * 40)
+            self.assertFalse(decision['material'])
+            self.assertEqual(decision['reason'], 'unchanged_reviewed_head')
+            launcher.github.pull.assert_not_called()
+
     def test_real_launcher_persists_plan_and_restart_does_not_spawn_twice(self):
         with tempfile.TemporaryDirectory() as directory:
             github = Mock()

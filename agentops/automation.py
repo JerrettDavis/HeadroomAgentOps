@@ -97,6 +97,19 @@ class AutoReview:
                         proof['head_sha'] != job['head_sha'] or
                         previous['head_sha'] != job['head_sha']):
                     continue
+                if (previous['head_sha'] == pr['head_sha'] and
+                        isinstance(previous.get('files'), list) and pr.get('base_ref') and
+                        previous.get('base_ref') == pr['base_ref'] and pr.get('head_repo') and
+                        previous.get('head_repo') == pr['head_repo']):
+                    # A stopped duplicate cannot create new source at an already
+                    # analysed immutable head. Target/main qualification stays separate.
+                    record = {'material': False, 'reason': 'unchanged_reviewed_head',
+                              'head_sha': pr['head_sha'], 'main_sha': main_sha,
+                              'inventory_identity': inventory_identity, 'source_job': job['id'],
+                              'prior_review': reference, 'current_inventory': evidence.put(pr),
+                              'recorded_at': time.time(), 'scope': 'scheduling_only_no_approval'}
+                    notes[str(pr['number'])] = {**record, 'evidence': evidence.put(record)}
+                    return record
                 current = self.launcher.github.pull(pr['number'])
                 if current['head_sha'] != pr['head_sha']:
                     return {'material': True, 'reason': 'head_changed_during_comparison'}
