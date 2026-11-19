@@ -72,6 +72,18 @@ class AutoReview:
         """
         notes = self.data.setdefault('review_notes', {})
         evidence = Evidence(self.launcher.root / 'evidence')
+        inventory_identity = {key: pr.get(key) for key in
+                              ('number', 'head_sha', 'base_sha', 'base_ref', 'head_repo', 'updated_at')}
+        cached = notes.get(str(pr['number']), {})
+        if (all(pr.get(key) for key in ('base_sha', 'base_ref', 'head_repo', 'updated_at')) and
+                cached.get('inventory_identity') == inventory_identity and
+                cached.get('main_sha') == main_sha and cached.get('material') is False):
+            try:
+                recorded = evidence.get(cached['evidence']['sha256'])
+                if recorded == {key: value for key, value in cached.items() if key != 'evidence'}:
+                    return cached
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
         candidates = sorted(prior, key=lambda j: j.get('created', 0), reverse=True)
         for job in candidates:
             reference = (job.get('result') or {}).get('evidence_record')
@@ -118,6 +130,7 @@ class AutoReview:
                                     pass
                 decision = compare_review_diff(previous, current)
                 record = {**decision, 'head_sha': pr['head_sha'], 'main_sha': main_sha,
+                          'inventory_identity': inventory_identity,
                           'source_job': job['id'], 'prior_review': reference,
                           'current_pr': evidence.put(current), 'recorded_at': time.time(),
                           'scope': 'scheduling_only_no_approval'}
@@ -204,7 +217,13 @@ class AutoReview:
                              and ((j.get('result') or {}).get('require_decision') or
                                   run_info(j).get('config', {}).get('require_decision'))]
                 completed = any(not j.get('stale') and j.get('state') not in
-                                ('stale', 'failed', 'interrupted', 'cancelled') for j in exact)
+                                ('queued', 'running', 'stale', 'failed', 'interrupted', 'cancelled') for j in exact)
+                if (not event and not completed and not active and any(
+                        j.get('state') == 'queued' and run_info(j).get('stopped') for j in exact)):
+                    # A cancelled batch never inspected this head. Re-evaluate
+                    # its contribution against real prior analysis before dispatch.
+                    event = 'updated_prs'
+                    current[key]['pending'] = event
                 if active or (completed and not required) or (required and attempted):
                     current[key]['pending'] = None
                     if required and attempted and pr['author'].lower() not in excluded:

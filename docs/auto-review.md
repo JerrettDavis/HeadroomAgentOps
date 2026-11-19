@@ -60,6 +60,18 @@ Failed workers retry with an increasing delay, starting at five minutes and
 capped at one hour for the same head/main. Successful or active work takes
 precedence over old failures. Other PRs and new revisions remain eligible.
 
+Jobs queued in stopped sessions never count as completed reviews. If such a job
+hid a head that has not been analysed, the updated-PR trigger rechecks it against
+actual prior analysis, even when that head was already inventoried. Equivalent
+diffs retain a verified skip receipt bound to head, target, repository, inventory
+update time and main; materially changed contributions are queued normally.
+
+The ALL dashboard view includes historical PRs and closed PRs. Its historical
+outcome fraction is not live review coverage. Queued jobs from stopped sessions
+are labeled **Stopped before dispatch** and excluded from **Queued for dispatch**.
+Earlier persisted analysis is labeled separately and does not imply that a newer
+head was reviewed.
+
 Every five minutes a single background task rechecks up to four outstanding
 current-revision reviews without blocking inventory polling. Attempt timestamps persist independently of success so malformed records
 cannot starve later reviews. Existing gates can release qualified approvals when

@@ -243,6 +243,33 @@ class AutomationTests(unittest.TestCase):
             auto.tick()
             launcher.launch.assert_called_once()
 
+    def test_stopped_unstarted_plan_cannot_hide_unreviewed_changed_head(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None}})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'CHANGES_REQUESTED'
+            launcher.ledger.jobs.return_value = [{'repo': 'o/r', 'number': 2, 'head_sha': 'a',
+                'main_sha': 'm' * 40, 'state': 'queued', 'run_id': 'stopped', 'result': None}]
+            launcher.ledger.get_run.return_value = {'stopped': True, 'config': {}}
+            auto.tick()
+            launcher.launch.assert_called_once()
+
+    def test_skip_cache_is_bound_to_target_and_inventory_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            pr = {**self.snapshot((2, 'a', False, 'user'))['prs'][0],
+                  'base_sha': 'b' * 40, 'base_ref': 'main', 'head_repo': 'o/fork'}
+            identity = {key: pr.get(key) for key in
+                        ('number', 'head_sha', 'base_sha', 'base_ref', 'head_repo', 'updated_at')}
+            record = {'material': False, 'reason': 'equivalent_contribution',
+                      'inventory_identity': identity, 'main_sha': 'm' * 40, 'source_job': 'prior'}
+            evidence = Evidence(Path(directory) / 'evidence')
+            auto.data['review_notes'] = {'2': {**record, 'evidence': evidence.put(record)}}
+            self.assertFalse(auto.material_update(pr, [], 'm' * 40)['material'])
+            self.assertTrue(auto.material_update({**pr, 'base_ref': 'release'}, [], 'm' * 40)['material'])
+
     def test_real_launcher_persists_plan_and_restart_does_not_spawn_twice(self):
         with tempfile.TemporaryDirectory() as directory:
             github = Mock()

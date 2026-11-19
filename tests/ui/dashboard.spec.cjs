@@ -1,5 +1,23 @@
 const {test, expect} = require('@playwright/test');
 
+test('stopped queued records are historical, not pending live review work', async ({page, request}) => {
+  const all = await (await request.get('/api/report')).json();
+  const run = all.runs.find(r => r.total === 30);
+  const report = await (await request.get('/api/report?run=' + run.id)).json();
+  report.runs.find(r => r.id === run.id).stopped = true;
+  report.jobs.forEach(job => { job.state = 'queued'; job.stale = 0; });
+  report.states = {queued: report.jobs.length};
+  report.finished = 0;
+  report.active_prs = 0;
+  await page.route('**/api/report*', route => route.fulfill({json: report}));
+  await page.reload();
+  await expect(page.locator('#metrics .metric').first()).toContainText('Queued for dispatch');
+  await expect(page.locator('#metrics .metric').first().locator('strong')).toHaveText('0');
+  await expect(page.locator('#metrics')).toContainText('30 stopped before dispatch');
+  await expect(page.locator('.job').first()).toContainText('Stopped before dispatch');
+  await expect(page.locator('#metrics')).not.toContainText('Processed');
+});
+
 test.beforeEach(async ({page, request, baseURL}) => {
   await page.addInitScript(() => localStorage.setItem('agentops-view', 'reviews'));
   await page.route('**/*', route => new URL(route.request().url()).origin === baseURL
