@@ -238,14 +238,19 @@ class AutoReview:
                                 and (j.get('result') or {}).get('outcome') in
                                     ('ready', 'awaiting_ci', 'reviewed', 'needs_followup')]
                     source = max(analyses, key=lambda j: (j.get('created', 0), j.get('id', ''))) if analyses else None
-                    if (source and source.get('main_sha') != snapshot['main_sha']
+                    if (source
                             and ((source.get('result') or {}).get('publication') or {}).get('decision') != 'APPROVE'
                             and any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
                                     for a in (source.get('result') or {}).get('actions', []))):
+                        main_changed = source.get('main_sha') != snapshot['main_sha']
+                        reasons = (['Source review proposed approval, but main changed; '
+                                    'current-target qualification is required before publication.'] if main_changed
+                                   else (source['result'].get('qualification_limits') or
+                                         ['Saved approval requires publication qualification.']))
                         attention.append({'number': pr['number'], 'head_sha': head,
-                            'state': 'target_qualification_required', 'source_job': source['id'],
-                            'reasons': ['Source review proposed approval, but main changed; '
-                                        'current-target qualification is required before publication.'],
+                            'state': ('target_qualification_required' if main_changed
+                                      else 'publication_qualification_required'), 'source_job': source['id'],
+                            'reasons': reasons,
                             'reviewed_main_sha': source['main_sha'], 'current_main_sha': snapshot['main_sha']})
                 if (not event and not completed and not active and any(
                         j.get('state') == 'queued' and run_info(j).get('stopped') for j in exact)):
@@ -255,7 +260,10 @@ class AutoReview:
                     current[key]['pending'] = event
                 if active or (completed and not required) or (required and attempted):
                     current[key]['pending'] = None
-                    if required and attempted and pr['author'].lower() not in excluded:
+                    if (required and attempted and pr['author'].lower() not in excluded and
+                            not any(item.get('number') == pr['number'] and item.get('state') in
+                                    ('target_qualification_required', 'publication_qualification_required')
+                                    for item in attention)):
                         attention.append({'number': pr['number'], 'head_sha': head,
                                           'state': attempted[-1].get('state'),
                                           'reasons': (attempted[-1].get('result') or {}).get(

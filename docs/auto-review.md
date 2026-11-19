@@ -81,6 +81,10 @@ change request. It remains a hold rather than silently disappearing from work
 status. Newer completed analysis supersedes the old proposal. A main-only update
 does not automatically consume another model session or bypass qualification;
 explicit follow-ups reuse prior notes and unchanged-file coverage.
+Unpublished approval proposals against current main also remain visible with
+their saved qualification reasons. Equivalent-contribution skips are counted as
+reused analysis, separately from unresolved holds. Current analysis and successful
+publication are distinct states; neither a skip nor an old proposal grants approval.
 
 Every five minutes a single background task rechecks up to four outstanding
 current-revision reviews without blocking inventory polling. Attempt timestamps persist independently of success so malformed records

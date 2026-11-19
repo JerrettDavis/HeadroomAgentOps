@@ -1,5 +1,16 @@
 const {test, expect} = require('@playwright/test');
 
+test('automatic review status distinguishes reused analysis from unresolved holds', async ({page, request}) => {
+  const info=await (await request.get('/api/launcher')).json();
+  info.automation.settings.new_prs=true;
+  info.automation.attention=[{state:'held'},{state:'target_qualification_required'},
+    {state:'publication_qualification_required'},{state:'review_reused'},{state:'review_reused'}];
+  await page.route('**/api/launcher', route=>route.fulfill({json:info}));
+  await page.reload();
+  await expect(page.locator('#autostatus')).toContainText('3 unresolved holds');
+  await expect(page.locator('#autostatus')).toContainText('2 reused');
+});
+
 test('stopped queued records are historical, not pending live review work', async ({page, request}) => {
   const all = await (await request.get('/api/report')).json();
   const run = all.runs.find(r => r.total === 30);

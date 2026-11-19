@@ -266,6 +266,23 @@ class AutomationTests(unittest.TestCase):
             self.assertFalse(any(h['state'] == 'target_qualification_required' for h in auto.status()['attention']))
             launcher.launch.assert_not_called()
 
+    def test_unpublished_current_main_approval_keeps_qualification_hold_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'CHANGES_REQUESTED'
+            launcher.ledger.jobs.return_value = [{'id': 'review', 'repo': 'o/r', 'number': 2,
+                'head_sha': 'a', 'main_sha': 'm' * 40, 'state': 'held', 'run_id': 'current',
+                'result': {'outcome': 'needs_followup', 'qualification_limits': ['Hosted CI failed'],
+                           'actions': [{'kind': 'review', 'event': 'APPROVE'}]}}]
+            launcher.ledger.get_run.return_value = {'stopped': False, 'config': {'publish': True}}
+            auto.tick()
+            hold=auto.status()['attention'][0]
+            self.assertEqual(hold['state'], 'publication_qualification_required')
+            self.assertEqual(hold['reasons'], ['Hosted CI failed'])
+            launcher.launch.assert_not_called()
+
     def test_stopped_unstarted_mandatory_plan_is_not_a_completed_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
