@@ -75,6 +75,13 @@ are labeled **Stopped before dispatch** and excluded from **Queued for dispatch*
 Earlier persisted analysis is labeled separately and does not imply that a newer
 head was reviewed.
 
+An unpublished approval proposal against an older main is surfaced as
+`target_qualification_required`, even when GitHub still displays an earlier
+change request. It remains a hold rather than silently disappearing from work
+status. Newer completed analysis supersedes the old proposal. A main-only update
+does not automatically consume another model session or bypass qualification;
+explicit follow-ups reuse prior notes and unchanged-file coverage.
+
 Every five minutes a single background task rechecks up to four outstanding
 current-revision reviews without blocking inventory polling. Attempt timestamps persist independently of success so malformed records
 cannot starve later reviews. Existing gates can release qualified approvals when

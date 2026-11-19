@@ -231,6 +231,22 @@ class AutoReview:
                                   run_info(j).get('config', {}).get('require_decision'))]
                 completed = any(not j.get('stale') and j.get('state') not in
                                 ('queued', 'running', 'stale', 'failed', 'interrupted', 'cancelled') for j in exact)
+                if (not active and pr['author'].lower() not in excluded and not pr.get('draft', True)
+                        and pr.get('review_decision') != 'APPROVED'):
+                    analyses = [j for j in exact if not run_info(j).get('stopped')
+                                and j.get('state') not in ('queued', 'running', 'failed', 'cancelled', 'interrupted')
+                                and (j.get('result') or {}).get('outcome') in
+                                    ('ready', 'awaiting_ci', 'reviewed', 'needs_followup')]
+                    source = max(analyses, key=lambda j: (j.get('created', 0), j.get('id', ''))) if analyses else None
+                    if (source and source.get('main_sha') != snapshot['main_sha']
+                            and ((source.get('result') or {}).get('publication') or {}).get('decision') != 'APPROVE'
+                            and any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
+                                    for a in (source.get('result') or {}).get('actions', []))):
+                        attention.append({'number': pr['number'], 'head_sha': head,
+                            'state': 'target_qualification_required', 'source_job': source['id'],
+                            'reasons': ['Source review proposed approval, but main changed; '
+                                        'current-target qualification is required before publication.'],
+                            'reviewed_main_sha': source['main_sha'], 'current_main_sha': snapshot['main_sha']})
                 if (not event and not completed and not active and any(
                         j.get('state') == 'queued' and run_info(j).get('stopped') for j in exact)):
                     # A cancelled batch never inspected this head. Re-evaluate
