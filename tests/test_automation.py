@@ -11,6 +11,20 @@ from agentops.evidence import Evidence
 
 
 class AutomationTests(unittest.TestCase):
+    def test_equivalent_update_cannot_hide_an_unpublished_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            previous = {'number': 2, 'head_sha': 'old', 'files': []}
+            proof = {'number': 2, 'head_sha': 'old', 'reviewed_pr_evidence': evidence.put(previous),
+                     'actions': [{'kind': 'review', 'event': 'APPROVE', 'body': 'Validated.'}]}
+            prior = [{'id': 'analysis', 'state': 'stale', 'head_sha': 'old',
+                      'result': {'evidence_record': evidence.put(proof)}}]
+            launcher.github.pull.return_value = {**previous, 'head_sha': 'new'}
+            decision = auto.material_update({'number': 2, 'head_sha': 'new'}, prior, 'm' * 40)
+            self.assertTrue(decision['material'])
+            self.assertEqual(decision['reason'], 'unpublished_approval_requires_qualification')
+
     def test_new_proof_on_unchanged_head_requires_review(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)

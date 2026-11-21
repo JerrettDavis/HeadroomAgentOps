@@ -82,7 +82,11 @@ class AutoReview:
             try:
                 recorded = evidence.get(cached['evidence']['sha256'])
                 if recorded == {key: value for key, value in cached.items() if key != 'evidence'}:
-                    return cached
+                    prior_proof = evidence.get(cached['prior_review']['sha256']) if cached.get('prior_review') else {}
+                    if not (any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
+                                for a in prior_proof.get('actions', [])) and
+                            (prior_proof.get('publication') or {}).get('decision') != 'APPROVE'):
+                        return cached
             except (OSError, ValueError, KeyError, TypeError):
                 pass
         candidates = sorted(prior, key=lambda j: j.get('created', 0), reverse=True)
@@ -98,6 +102,11 @@ class AutoReview:
                         proof['head_sha'] != job['head_sha'] or
                         previous['head_sha'] != job['head_sha']):
                     continue
+                if (any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
+                        for a in proof.get('actions', [])) and
+                        (proof.get('publication') or {}).get('decision') != 'APPROVE'):
+                    return {'material': True, 'reason': 'unpublished_approval_requires_qualification',
+                            'source_job': job['id']}
                 current = None
                 if (previous.get('updated_at') and pr.get('updated_at') and
                         previous['updated_at'] != pr['updated_at']):
