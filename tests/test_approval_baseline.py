@@ -10,6 +10,43 @@ from agentops.publisher import Publisher
 
 
 class ApprovalBaselineTests(unittest.TestCase):
+    def test_reviewed_workflow_delta_can_be_approved_without_authorizing_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            class GitHub(FakeGitHub):
+                def review_workflow_baseline(self, current, main_sha):
+                    return {'manifest_hash': 'previous-manifest', 'review_events': False}
+                def request(self, method, endpoint, payload=None):
+                    if method == 'GET' and '/contents/Dockerfile?ref=' in endpoint:
+                        return {'type': 'file', 'sha': 'd' * 40}
+                    return super().request(method, endpoint, payload)
+            current = {**pr(), 'base_sha': MAIN,
+                       'files': [{'filename': '.github/workflows/security.yml'}]}
+            review = {**result(), 'coverage': {'files': ['.github/workflows/security.yml'], 'threads': []},
+                      'source_review': {'manifest_hash': 'manifest', 'verdict': 'held',
+                          'review_only_verdict': 'clear', 'execution_hold_scope': 'inherited_only',
+                          'inherited_execution_paths': ['Dockerfile'],
+                          'rationale': 'Changed checksum step reviewed; unrelated inherited Docker inputs remain held.',
+                          'evidence': ['Exact workflow blobs reviewed; checksum regression passes.']}}
+            attach_approval_baseline(GitHub(), Evidence(Path(directory)), current, MAIN, review)
+            self.assertEqual(gate(current, current, MAIN, MAIN, review, []), [])
+            self.assertEqual(review['source_review']['verdict'], 'held')
+            review['source_review']['evidence'] = []
+            self.assertIn('Exact-source provenance review is incomplete',
+                          gate(current, current, MAIN, MAIN, review, []))
+
+    def test_new_source_hold_cannot_be_waived_by_ordinary_test_and_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            class GitHub(FakeGitHub):
+                def review_workflow_baseline(self, current, main_sha):
+                    return {'manifest_hash': 'previous-manifest', 'review_events': False}
+            current = {**pr(), 'base_sha': MAIN,
+                       'files': [{'filename': '.github/workflows/security.yml'}]}
+            review = {**result(), 'coverage': {'files': ['.github/workflows/security.yml'], 'threads': []},
+                      'source_review': {'manifest_hash': 'manifest', 'verdict': 'held',
+                          'rationale': 'New installer is unverified.', 'evidence': ['Workflow examined.']}}
+            attach_approval_baseline(GitHub(), Evidence(Path(directory)), current, MAIN, review)
+            self.assertNotIn('approval_source_baseline', review)
+
     def test_inherited_workflow_hold_does_not_imply_new_execution_permission(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence=Evidence(Path(directory))

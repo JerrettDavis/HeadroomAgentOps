@@ -18,6 +18,13 @@ def result():
 
 
 class WorkerTests(unittest.TestCase):
+    def test_review_only_source_attribution_survives_worker_result_validation(self):
+        value = {**result(), 'source_review': {'manifest_hash': 'manifest', 'verdict': 'held',
+            'rationale': 'Changed code is clear; unchanged Docker sources remain execution-held.',
+            'evidence': ['Checksum regression passed.'], 'review_only_verdict': 'clear',
+            'execution_hold_scope': 'inherited_only', 'inherited_execution_paths': ['Dockerfile']}}
+        self.assertEqual(validate_result(value, value), value)
+
     def test_discard_unstarted_preparation_clears_auth_without_docker_calls(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
