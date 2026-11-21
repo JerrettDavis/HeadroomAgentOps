@@ -11,6 +11,75 @@ from agentops.evidence import Evidence
 
 
 class AutomationTests(unittest.TestCase):
+    def test_new_proof_on_unchanged_head_requires_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            previous = {'number': 2, 'head_sha': 'a', 'base_ref': 'main',
+                        'head_repo': 'o/fork', 'updated_at': 'old', 'body': 'Proof missing', 'files': []}
+            proof = {'number': 2, 'head_sha': 'a', 'reviewed_pr_evidence': evidence.put(previous)}
+            prior = [{'id': 'analysis', 'state': 'stale', 'head_sha': 'a',
+                      'result': {'evidence_record': evidence.put(proof)}}]
+            current = {**previous, 'updated_at': 'new', 'body': 'Live behavior proof attached'}
+            launcher.github.pull.return_value = current
+            decision = auto.material_update(current, prior, 'm' * 40)
+            self.assertTrue(decision['material'])
+            self.assertEqual(decision['reason'], 'review_context_changed')
+
+    def test_completed_changes_request_does_not_hide_new_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None, 'updated_at': 'old'}})
+            snap = self.snapshot((2, 'a', False, 'user'))
+            snap['prs'][0].update(updated_at='new', review_decision='CHANGES_REQUESTED')
+            launcher.github.snapshot.return_value = snap
+            launcher.ledger.jobs.return_value = [{'id': 'analysis', 'repo': 'o/r', 'number': 2,
+                'head_sha': 'a', 'main_sha': 'm' * 40, 'state': 'needs_followup', 'stale': False,
+                'run_id': 'prior', 'result': {}}]
+            auto.material_update = Mock(return_value={'material': True, 'reason': 'review_context_changed'})
+            auto.tick()
+            launcher.launch.assert_called_once()
+
+    def test_proof_update_survives_another_busy_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None, 'updated_at': 'old'}})
+            snap = self.snapshot((2, 'a', False, 'user'))
+            snap['prs'][0].update(updated_at='new', review_decision='CHANGES_REQUESTED')
+            launcher.github.snapshot.return_value = snap
+            launcher.ledger.jobs.return_value = [{'id': 'analysis', 'repo': 'o/r', 'number': 2,
+                'head_sha': 'a', 'main_sha': 'm' * 40, 'state': 'needs_followup', 'stale': False,
+                'run_id': 'prior', 'result': {}}]
+            auto.material_update = Mock(return_value={'material': True, 'reason': 'review_context_changed'})
+            launcher.status.return_value = {'other': {'running': True}}
+            auto.tick()
+            launcher.launch.assert_not_called()
+            launcher.status.return_value = {}
+            auto.tick()
+            launcher.launch.assert_called_once()
+
+    def test_proof_added_during_active_review_is_revisited_after_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None, 'updated_at': 'old'}})
+            snap = self.snapshot((2, 'a', False, 'user'))
+            snap['prs'][0].update(updated_at='new', review_decision='CHANGES_REQUESTED')
+            launcher.github.snapshot.return_value = snap
+            job = {'id': 'analysis', 'repo': 'o/r', 'number': 2,
+                   'head_sha': 'a', 'main_sha': 'm' * 40, 'state': 'running', 'stale': False,
+                   'run_id': 'prior', 'result': {}}
+            launcher.ledger.jobs.return_value = [job]
+            launcher.ledger.get_run.return_value = {'stopped': False, 'config': {}}
+            auto.material_update = Mock(return_value={'material': True, 'reason': 'review_context_changed'})
+            auto.tick()
+            launcher.launch.assert_not_called()
+            job['state'] = 'needs_followup'
+            auto.tick()
+            launcher.launch.assert_called_once()
+
     def test_equivalent_head_update_skips_worker_and_persists_notes(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
@@ -231,7 +300,7 @@ class AutomationTests(unittest.TestCase):
             launcher.launch.assert_not_called()
             self.assertEqual(auto.status()['attention'][0]['number'], 2)
 
-    def test_old_main_approval_hold_is_visible_without_reingesting_source(self):
+    def test_old_main_approval_gets_current_target_review_instead_of_indefinite_hold(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
             auto.configure({'new_prs': True, 'updated_prs': True})
@@ -242,7 +311,7 @@ class AutomationTests(unittest.TestCase):
                 'result': {'outcome': 'ready', 'actions': [{'kind': 'review', 'event': 'APPROVE'}]}}]
             launcher.ledger.get_run.return_value = {'stopped': False, 'config': {'publish': True}}
             auto.tick()
-            launcher.launch.assert_not_called()
+            launcher.launch.assert_called_once()
             hold=auto.status()['attention'][0]
             self.assertEqual(hold['state'], 'target_qualification_required')
             self.assertEqual(hold['source_job'], 'review')

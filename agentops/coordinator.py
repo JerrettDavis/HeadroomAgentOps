@@ -241,11 +241,11 @@ class Coordinator:
                         result['reviewed_notice_ids'] = sorted(set(result['reviewed_notice_ids']))
                         result['determination_required'] = True
                         record_shared_audit(self.ledger,self.evidence,job,result)
-                        if self.publisher and state != 'stale':
+                        if self.publisher:
                             publication = self.publisher.publish(job, item['original'], result)
                             result['publication'] = publication
                             result['own_discussion_entries'] = publication['own_discussion_entries']
-                            if result.get('require_decision') and not publication.get('decision'):
+                            if state != 'stale' and result.get('require_decision') and not publication.get('decision'):
                                 state='needs_followup'
                             if publication['held'] and state == 'ready':
                                 state = 'held'

@@ -5,6 +5,7 @@ import threading
 import time
 
 from .evidence import Evidence
+from .discussion import fingerprint
 from .material_diff import compare_review_diff, hunk_coordinates
 
 
@@ -97,6 +98,16 @@ class AutoReview:
                         proof['head_sha'] != job['head_sha'] or
                         previous['head_sha'] != job['head_sha']):
                     continue
+                current = None
+                if (previous.get('updated_at') and pr.get('updated_at') and
+                        previous['updated_at'] != pr['updated_at']):
+                    current = self.launcher.github.pull(pr['number'])
+                    if current['head_sha'] != pr['head_sha']:
+                        return {'material': True, 'reason': 'head_changed_during_comparison'}
+                    omitted = proof.get('own_discussion_entries', [])
+                    if fingerprint(previous, omitted) != fingerprint(current, omitted):
+                        return {'material': True, 'reason': 'review_context_changed',
+                                'source_job': job['id']}
                 if (previous['head_sha'] == pr['head_sha'] and
                         isinstance(previous.get('files'), list) and pr.get('base_ref') and
                         previous.get('base_ref') == pr['base_ref'] and pr.get('head_repo') and
@@ -110,7 +121,7 @@ class AutoReview:
                               'recorded_at': time.time(), 'scope': 'scheduling_only_no_approval'}
                     notes[str(pr['number'])] = {**record, 'evidence': evidence.put(record)}
                     return record
-                current = self.launcher.github.pull(pr['number'])
+                current = current or self.launcher.github.pull(pr['number'])
                 if current['head_sha'] != pr['head_sha']:
                     return {'material': True, 'reason': 'head_changed_during_comparison'}
                 if not isinstance(previous.get('files'), list) or not isinstance(current.get('files'), list):
@@ -207,18 +218,25 @@ class AutoReview:
             for pr in snapshot['prs']:
                 key = str(pr['number'])
                 old = seen.get(key)
+                context_update = bool(old and (old.get('context_pending') or
+                                      (old.get('updated_at') and pr.get('updated_at')
+                                       and old['updated_at'] != pr['updated_at'])))
                 head = pr['head_sha']
                 event = old.get('pending') if old else None
                 prior = [j for j in jobs if j['number'] == pr['number']]
+                target_review_required = False
                 required = pr.get('review_decision') == 'REVIEW_REQUIRED'
                 if self.data['initialized']:
                     if old is None:
                         event = 'new_prs'
                     elif old['head'] != head and (event != 'new_prs' or not settings['new_prs']):
                         event = 'updated_prs'
+                    elif context_update:
+                        event = 'updated_prs'
                 if required and not event:
                     event = 'updated_prs' if prior else 'new_prs'
-                current[key] = {'head': head, 'pending': event}
+                current[key] = {'head': head, 'pending': event, 'updated_at': pr.get('updated_at'),
+                                'context_pending': context_update}
                 exact = [j for j in prior if j['head_sha'] == head]
                 active = any(j.get('state') in ('queued', 'running') and not j.get('stale')
                              and not run_info(j).get('stopped') for j in exact)
@@ -243,6 +261,10 @@ class AutoReview:
                             and any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
                                     for a in (source.get('result') or {}).get('actions', []))):
                         main_changed = source.get('main_sha') != snapshot['main_sha']
+                        if main_changed and settings['updated_prs']:
+                            target_review_required = True
+                            event = 'updated_prs'
+                            current[key]['pending'] = event
                         reasons = (['Source review proposed approval, but main changed; '
                                     'current-target qualification is required before publication.'] if main_changed
                                    else (source['result'].get('qualification_limits') or
@@ -258,8 +280,10 @@ class AutoReview:
                     # its contribution against real prior analysis before dispatch.
                     event = 'updated_prs'
                     current[key]['pending'] = event
-                if active or (completed and not required) or (required and attempted):
-                    current[key]['pending'] = None
+                if active or (not context_update and not target_review_required and
+                              ((completed and not required) or (required and attempted))):
+                    if not (active and context_update):
+                        current[key]['pending'] = None
                     if (required and attempted and pr['author'].lower() not in excluded and
                             not any(item.get('number') == pr['number'] and item.get('state') in
                                     ('target_qualification_required', 'publication_qualification_required')
@@ -282,10 +306,11 @@ class AutoReview:
                         continue
                 if (event and settings[event] and pr['author'].lower() not in excluded
                         and (not settings['non_draft_only'] or not pr.get('draft', True))):
-                    if prior:
+                    if prior and not target_review_required:
                         decision = self.material_update(pr, prior, snapshot['main_sha'])
                         if not decision['material']:
                             current[key]['pending'] = None
+                            current[key]['context_pending'] = False
                             attention.append({'number': pr['number'], 'head_sha': head,
                                               'state': 'review_reused',
                                               'reasons': [decision['reason']],
@@ -315,6 +340,7 @@ class AutoReview:
                     raise ValueError(result['error'])
                 for number in selected:
                     current[str(number)]['pending'] = None
+                    current[str(number)]['context_pending'] = False
                 self.data['last_run'] = result['run_id']
                 self.data['eligible'] -= len(selected)
                 self.save()

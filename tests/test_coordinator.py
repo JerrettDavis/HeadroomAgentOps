@@ -70,6 +70,21 @@ class FakeWorker:
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_main_advancing_during_review_does_not_suppress_public_analysis(self):
+        collect = self.worker.collect
+        published = []
+        def changed_main(handle, job):
+            value = collect(handle, job)
+            self.github.main = 'c' * 40
+            return value
+        self.worker.collect = changed_main
+        self.coordinator.publisher = SimpleNamespace(publish=lambda job, original, value:
+            published.append(job['number']) or {'sent': [{'id': 1}], 'held': [], 'own_discussion_entries': []})
+        self.coordinator.run(self.run)
+        self.assertTrue(published)
+        self.assertTrue(any(j['state'] == 'stale' and (j.get('result') or {}).get('publication')
+                            for j in self.db.jobs(self.run)))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
