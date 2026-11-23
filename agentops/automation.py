@@ -284,8 +284,11 @@ class AutoReview:
                             'reasons': reasons,
                             'reviewed_main_sha': source['main_sha'], 'current_main_sha': snapshot['main_sha']})
                 if (not event and not completed and not active and any(
-                        j.get('state') == 'queued' and run_info(j).get('stopped') for j in exact)):
-                    # A cancelled batch never inspected this head. Re-evaluate
+                        (j.get('state') == 'queued' and run_info(j).get('stopped')) or
+                        (j.get('state') in ('stale', 'interrupted', 'cancelled') and
+                         not any((j.get('result') or {}).get(key)
+                                 for key in ('reviewed_pr_evidence', 'evidence_record'))) for j in exact)):
+                    # Cancelled or invalidated unstarted work never inspected this head. Re-evaluate
                     # its contribution against real prior analysis before dispatch.
                     event = 'updated_prs'
                     current[key]['pending'] = event

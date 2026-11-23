@@ -11,6 +11,19 @@ from agentops.evidence import Evidence
 
 
 class AutomationTests(unittest.TestCase):
+    def test_main_invalidated_unstarted_job_keeps_current_head_eligible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None}})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'CHANGES_REQUESTED'
+            launcher.ledger.jobs.return_value = [{'repo':'o/r','number':2,'head_sha':'a',
+                'main_sha':'old-main','state':'stale','stale':True,'run_id':'invalidated','result':None}]
+            launcher.ledger.get_run.return_value = {'stopped':False,'config':{}}
+            auto.tick()
+            launcher.launch.assert_called_once()
+
     def test_equivalent_update_cannot_hide_an_unpublished_approval(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
