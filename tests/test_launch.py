@@ -12,6 +12,22 @@ from agentops.cli import DEFAULTS
 
 
 class LaunchTests(unittest.TestCase):
+    def test_resume_skips_live_coordinator_after_panel_loses_process_handles(self):
+        from agentops.process import process_identity
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, github = self.setup_launcher(directory)
+            snapshot = github.snapshot.return_value
+            for pr in snapshot['prs']: pr['draft'] = False
+            run = launcher.ledger.create_run(launcher.ledger.save_snapshot(snapshot),
+                {**launcher.config, 'require_decision': True})
+            for pr in snapshot['prs']: launcher.ledger.enqueue(run, pr, snapshot['main_sha'])
+            launcher.ledger.claim(json.dumps(process_identity()), 4, run)
+            github.snapshot.reset_mock()
+            with patch('agentops.launch.subprocess.Popen') as spawn:
+                self.assertEqual(launcher.resume_reviews([run]), [])
+                spawn.assert_not_called()
+            github.snapshot.assert_not_called()
+
     def test_unstarted_orphan_is_recovered_but_stopped_run_is_not_revived(self):
         from agentops.process import process_identity
         for stopped in (False, True):

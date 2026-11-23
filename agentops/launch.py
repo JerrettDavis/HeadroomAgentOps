@@ -317,7 +317,12 @@ class Launcher:
                 if (run['stopped'] or not self.config.get('publish') or not run['config'].get('publish')
                         or not run['config'].get('require_decision')):
                     continue
-                jobs = [j for j in self.ledger.jobs(run_id) if j['state'] == 'queued' and not j['stale']]
+                run_jobs = self.ledger.jobs(run_id)
+                if any(j['state'] == 'running' and owner_state(j['owner']) != 'missing' for j in run_jobs):
+                    # Panel restarts lose Popen handles, not coordinator ownership.
+                    # Do not re-inventory a live run or start a competing coordinator.
+                    continue
+                jobs = [j for j in run_jobs if j['state'] == 'queued' and not j['stale']]
                 if not jobs:
                     continue
                 try:
