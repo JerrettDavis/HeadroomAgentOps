@@ -94,6 +94,22 @@ class FakeAPI:
 
 
 class InventoryTests(unittest.TestCase):
+    def test_scheduling_context_has_complete_discussion_without_files_or_execution_inventory(self):
+        api = FakeAPI()
+        calls = []
+        def record(method, endpoint, payload=None):
+            calls.append(endpoint)
+            return api(method, endpoint, payload)
+        context = GitHub('o/r', record, page_size=1).pull(1, discussion_only=True)
+        full = GitHub('o/r', FakeAPI(), page_size=1).pull(1)
+        self.assertEqual(context['discussion_hash'], full['discussion_hash'])
+        self.assertEqual(context['threads'], full['threads'])
+        self.assertEqual(context['scope'], 'scheduling_only_no_approval')
+        self.assertNotIn('files', context)
+        self.assertNotIn('checks_hash', context)
+        self.assertFalse(any('/files' in path or '/actions/' in path or '/contents/' in path
+                             or '/check-runs' in path for path in calls))
+
     def test_read_transport_retries_transient_gateway_failure(self):
         import subprocess
         from unittest.mock import patch

@@ -110,7 +110,7 @@ class AutoReview:
                 current = None
                 if (previous.get('updated_at') and pr.get('updated_at') and
                         previous['updated_at'] != pr['updated_at']):
-                    current = self.launcher.github.pull(pr['number'])
+                    current = self.launcher.github.pull(pr['number'], discussion_only=True)
                     if current['head_sha'] != pr['head_sha']:
                         return {'material': True, 'reason': 'head_changed_during_comparison'}
                     omitted = proof.get('own_discussion_entries', [])
@@ -130,7 +130,8 @@ class AutoReview:
                               'recorded_at': time.time(), 'scope': 'scheduling_only_no_approval'}
                     notes[str(pr['number'])] = {**record, 'evidence': evidence.put(record)}
                     return record
-                current = current or self.launcher.github.pull(pr['number'])
+                if current is None or not isinstance(current.get('files'), list):
+                    current = self.launcher.github.pull(pr['number'])
                 if current['head_sha'] != pr['head_sha']:
                     return {'material': True, 'reason': 'head_changed_during_comparison'}
                 if not isinstance(previous.get('files'), list) or not isinstance(current.get('files'), list):

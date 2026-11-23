@@ -11,6 +11,26 @@ from agentops.evidence import Evidence
 
 
 class AutomationTests(unittest.TestCase):
+    def test_context_only_read_cannot_supply_changed_head_file_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            previous = {'number': 2, 'head_sha': 'old', 'base_ref': 'main', 'head_repo': 'o/fork',
+                        'updated_at': 'old', 'body': 'same',
+                        'files': [{'filename': 'a.py', 'status': 'modified',
+                                   'patch': '@@ -1 +1 @@\n-a()\n+b()'}]}
+            proof = {'number': 2, 'head_sha': 'old', 'reviewed_pr_evidence': evidence.put(previous)}
+            prior = [{'id': 'analysis', 'state': 'stale', 'head_sha': 'old',
+                      'result': {'evidence_record': evidence.put(proof)}}]
+            current = {**previous, 'head_sha': 'new', 'updated_at': 'new'}
+            context = {k:v for k,v in current.items() if k != 'files'}
+            launcher.github.pull.side_effect = [context, current]
+            decision = auto.material_update(current, prior, 'm' * 40)
+            self.assertFalse(decision['material'])
+            self.assertEqual(launcher.github.pull.call_count, 2)
+            self.assertEqual(launcher.github.pull.call_args_list[0].kwargs, {'discussion_only': True})
+            self.assertEqual(launcher.github.pull.call_args_list[1].kwargs, {})
+
     def test_main_invalidated_unstarted_job_keeps_current_head_eligible(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
@@ -52,6 +72,7 @@ class AutomationTests(unittest.TestCase):
             decision = auto.material_update(current, prior, 'm' * 40)
             self.assertTrue(decision['material'])
             self.assertEqual(decision['reason'], 'review_context_changed')
+            launcher.github.pull.assert_called_once_with(2, discussion_only=True)
 
     def test_completed_changes_request_does_not_hide_new_proof(self):
         with tempfile.TemporaryDirectory() as directory:

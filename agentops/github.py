@@ -293,7 +293,7 @@ class GitHub:
                 'selection': numbers,
                 'collected_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
-    def pull(self, number):
+    def pull(self, number, discussion_only=False):
         if type(number) is not int or number <= 0:
             raise ValueError('PR number must be a positive integer')
         raw = self.request('GET', f'repos/{self.repo}/pulls/{number}')
@@ -308,9 +308,10 @@ class GitHub:
               'base_sha': base['sha'], 'base_ref': base['ref'],
               'mergeable': {True: 'MERGEABLE', False: 'CONFLICTING', None: 'UNKNOWN'}[raw['mergeable']],
               'updated_at': raw['updated_at']}
-        pr['files'] = self.pages(f'repos/{self.repo}/pulls/{number}/files')
-        if len(pr['files']) != raw['changed_files']:
-            raise ValueError('Incomplete changed files; GitHub may have hit its 3000-file cap')
+        if not discussion_only:
+            pr['files'] = self.pages(f'repos/{self.repo}/pulls/{number}/files')
+            if len(pr['files']) != raw['changed_files']:
+                raise ValueError('Incomplete changed files; GitHub may have hit its 3000-file cap')
         pr['comments'] = self.pages(f'repos/{self.repo}/issues/{number}/comments')
         pr['reviews'] = self.pages(f'repos/{self.repo}/pulls/{number}/reviews')
         pr['review_comments'] = self.pages(f'repos/{self.repo}/pulls/{number}/comments')
@@ -333,21 +334,25 @@ class GitHub:
                 thread['comments'] = self._connection(fetch_comments)
             else:
                 thread['comments'] = initial['nodes']
-        pr['checks'] = self.pages(f'repos/{self.repo}/commits/{head["sha"]}/check-runs', 'check_runs')
-        pr['statuses'] = self.pages(f'repos/{self.repo}/commits/{head["sha"]}/statuses')
-        pr['workflows'] = []
-        for repo in dict.fromkeys([self.repo, pr['head_repo']]):
-            if repo:
-                runs = self.pages(f'repos/{repo}/actions/runs?head_sha={head["sha"]}', 'workflow_runs')
-                pr['workflows'].extend({**run, 'source_repo': repo} for run in runs)
-        self.workflow_qualification(pr)
+        if not discussion_only:
+            pr['checks'] = self.pages(f'repos/{self.repo}/commits/{head["sha"]}/check-runs', 'check_runs')
+            pr['statuses'] = self.pages(f'repos/{self.repo}/commits/{head["sha"]}/statuses')
+            pr['workflows'] = []
+            for repo in dict.fromkeys([self.repo, pr['head_repo']]):
+                if repo:
+                    runs = self.pages(f'repos/{repo}/actions/runs?head_sha={head["sha"]}', 'workflow_runs')
+                    pr['workflows'].extend({**run, 'source_repo': repo} for run in runs)
+            self.workflow_qualification(pr)
         # The detail fetch must not accidentally bind discussion from a different head.
         end = self.request('GET', f'repos/{self.repo}/pulls/{number}')
         if end['head']['sha'] != head['sha'] or end['updated_at'] != raw['updated_at']:
             raise ValueError('PR changed during detail collection; retry with fresh evidence')
         pr['discussion_hash'] = fingerprint(pr)
         pr['discussion_hash_version'] = 2
-        pr['checks_hash'] = digest({key: pr[key] for key in ('checks', 'statuses', 'workflows')})
+        if discussion_only:
+            pr['scope'] = 'scheduling_only_no_approval'
+        else:
+            pr['checks_hash'] = digest({key: pr[key] for key in ('checks', 'statuses', 'workflows')})
         return pr
 
     def workflow_qualification(self, pr):
