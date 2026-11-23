@@ -341,7 +341,9 @@ class AutoReview:
             self.data.update(seen=current, initialized=True, last_poll=time.time(),
                              attention=attention, eligible=len(selected))
             self.save()
-            if selected and not any(p['running'] for p in self.launcher.status().values()):
+            # Queue new heads even while another batch is running or allowance-
+            # paused. Ledger.claim enforces the global worker cap across runs.
+            if selected:
                 non_draft_only = settings['non_draft_only']
                 preview = self.launcher.preview({'source': 'batch', 'prs': ' '.join(map(str, selected)),
                                                  'non_draft_only': non_draft_only,

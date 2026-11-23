@@ -102,7 +102,7 @@ class AutomationTests(unittest.TestCase):
             auto.tick()
             launcher.launch.assert_called_once()
 
-    def test_proof_update_survives_another_busy_run(self):
+    def test_proof_update_is_queued_while_another_run_is_busy(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
             auto.configure({'updated_prs': True})
@@ -116,7 +116,7 @@ class AutomationTests(unittest.TestCase):
             auto.material_update = Mock(return_value={'material': True, 'reason': 'review_context_changed'})
             launcher.status.return_value = {'other': {'running': True}}
             auto.tick()
-            launcher.launch.assert_not_called()
+            launcher.launch.assert_called_once()
             launcher.status.return_value = {}
             auto.tick()
             launcher.launch.assert_called_once()
@@ -306,7 +306,7 @@ class AutomationTests(unittest.TestCase):
             auto.tick()
             launcher.launch.assert_called_once()
 
-    def test_invalid_toggle_and_busy_coordinator(self):
+    def test_invalid_toggle_and_new_pr_is_queued_while_coordinator_is_busy(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
             with self.assertRaises(ValueError):
@@ -317,7 +317,7 @@ class AutomationTests(unittest.TestCase):
             launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
             launcher.status.return_value = {'manual': {'running': True}}
             auto.tick()
-            launcher.launch.assert_not_called()
+            launcher.launch.assert_called_once()
             launcher.status.return_value = {}
             auto.tick()
             launcher.launch.assert_called_once()
