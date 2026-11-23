@@ -55,13 +55,14 @@ class Coordinator:
         limits = self.limits or Allowances(self.ledger, run['config'])
         snapshot = self.ledger.get_snapshot(run['snapshot_id'])
         live_main = self.github.main_sha()
+        active = self._restore_active(run_id)
         if live_main != snapshot['main_sha']:
             self.ledger.invalidate(snapshot['repo'], live_main,
                                    {p['number']: p['head_sha'] for p in snapshot['prs']},
                                    scope=snapshot.get('selection'))
-            return self.ledger.status(run_id)
-        active = self._restore_active(run_id)
-        if not self.ledger.get_run(run_id)['stopped']:
+            if not active:
+                return self.ledger.status(run_id)
+        if live_main == snapshot['main_sha'] and not self.ledger.get_run(run_id)['stopped']:
             reconciliation = reconcile_jobs(self.ledger, self.github, self.evidence, run_id,
                                             retry_changed=True, publisher=self.publisher)
             self.emit({'event': 'reconciled', **reconciliation})
@@ -168,7 +169,10 @@ class Coordinator:
                 self.ledger.heartbeat(identity, self.owner)
                 notices = self.ledger.notices(job['repo'], job['number'])
                 self._deliver_notices(handle, notices)
-                timed_out = time.monotonic() - item['started'] >= self.timeout_seconds
+                # A completed worker may be recovered long after its owner died.
+                # Observation delay is not evidence that its execution timed out.
+                timed_out = (observation['state'] == 'live' and
+                             time.monotonic() - item['started'] >= self.timeout_seconds)
                 if observation['state'] == 'live' and (stopped or timed_out):
                     self.worker.cancel(handle)
                     observation = self.worker.observe(handle)

@@ -444,6 +444,29 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(self.db.job(job['id'])['result']['session_id'], handle['session_id'])
 
 
+    def test_main_change_does_not_strand_completed_orphan_output(self):
+        from agentops.process import process_identity
+        from agentops.planning import packet
+        owner = json.dumps({**process_identity(), 'started': 'dead-owner'})
+        job = self.db.claim(owner, 2, self.run)
+        original = self.github.pull(job['number'])
+        prepared = self.worker.prepare(job, original, self.coordinator.evidence,
+            packet(original, self.db.get_snapshot(self.snapshot), [], self.coordinator.evidence))
+        handle = self.worker.start(prepared)
+        self.db.attach_handle(job['id'], owner, handle)
+        self.github.main = 'c' * 40
+        handle['started_at'] = 1
+        self.db.attach_handle(job['id'], owner, handle)
+        published = []
+        self.coordinator.publisher = SimpleNamespace(publish=lambda job, original, value:
+            published.append(job['number']) or {'sent': [{'id': 1}], 'held': [], 'own_discussion_entries': []})
+        self.coordinator.run(self.run)
+        recovered = self.db.job(job['id'])
+        self.assertEqual(recovered['state'], 'stale')
+        self.assertEqual(recovered['result']['session_id'], handle['session_id'])
+        self.assertEqual(published, [job['number']])
+        self.assertEqual(len(self.worker.sessions), 1)
+
     def test_worker_failure_is_visible_and_does_not_stop_other_prs(self):
         original = self.worker.collect
         def collect(handle, job):
