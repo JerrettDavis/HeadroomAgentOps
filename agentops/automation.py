@@ -9,6 +9,20 @@ from .discussion import fingerprint
 from .material_diff import compare_review_diff, hunk_coordinates
 
 
+def unpublished_revision(proof, head_sha, main_sha, source_main=None):
+    """Only changed revisions require a new qualification session.
+
+    Same-revision CI holds are reconciled mechanically. Discussion changes
+    still pass through fingerprint comparison, excluding our own publications.
+    """
+    reviewed_main = proof.get('main_sha') or source_main
+    changed = (proof.get('head_sha') != head_sha or
+               (reviewed_main is not None and reviewed_main != main_sha))
+    return (changed and any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
+                            for a in proof.get('actions', [])) and
+            (proof.get('publication') or {}).get('decision') != 'APPROVE')
+
+
 class AutoReview:
     def __init__(self, launcher):
         self.launcher = launcher
@@ -83,9 +97,7 @@ class AutoReview:
                 recorded = evidence.get(cached['evidence']['sha256'])
                 if recorded == {key: value for key, value in cached.items() if key != 'evidence'}:
                     prior_proof = evidence.get(cached['prior_review']['sha256']) if cached.get('prior_review') else {}
-                    if not (any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
-                                for a in prior_proof.get('actions', [])) and
-                            (prior_proof.get('publication') or {}).get('decision') != 'APPROVE'):
+                    if not unpublished_revision(prior_proof, pr['head_sha'], main_sha):
                         return cached
             except (OSError, ValueError, KeyError, TypeError):
                 pass
@@ -102,9 +114,7 @@ class AutoReview:
                         proof['head_sha'] != job['head_sha'] or
                         previous['head_sha'] != job['head_sha']):
                     continue
-                if (any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
-                        for a in proof.get('actions', [])) and
-                        (proof.get('publication') or {}).get('decision') != 'APPROVE'):
+                if unpublished_revision(proof, pr['head_sha'], main_sha, job.get('main_sha')):
                     return {'material': True, 'reason': 'unpublished_approval_requires_qualification',
                             'source_job': job['id']}
                 current = None

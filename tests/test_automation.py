@@ -11,6 +11,29 @@ from agentops.evidence import Evidence
 
 
 class AutomationTests(unittest.TestCase):
+    def test_own_qualification_comment_does_not_requeue_an_unpublished_approval(self):
+        from agentops.model import digest
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            previous = {'number':2,'head_sha':'a','base_ref':'main','base_sha':'base',
+                        'head_repo':'o/r','updated_at':'old','files':[],'comments':[]}
+            body = 'Approval remains pending CI qualification.'
+            own = {'kind':'comment','id':1,'body_hash':digest(body)}
+            proof = {'number':2,'head_sha':'a','main_sha':'m'*40,
+                     'reviewed_pr_evidence':evidence.put(previous),'own_discussion_entries':[own],
+                     'actions':[{'kind':'review','event':'APPROVE'}],
+                     'publication':{'sent':[{'id':1}]}}
+            prior = [{'id':'analysis','head_sha':'a','main_sha':'m'*40,'state':'needs_followup',
+                      'result':{**proof,'evidence_record':evidence.put(proof)}}]
+            current = {**previous,'updated_at':'new','comments':[{'id':1,'body':body}]}
+            launcher.github.pull.return_value = current
+            decision = auto.material_update(current,prior,'m'*40)
+            self.assertFalse(decision['material'])
+            self.assertEqual(decision['reason'],'unchanged_reviewed_head')
+            self.assertFalse(auto.material_update(current,prior,'m'*40)['material'])
+            launcher.github.pull.assert_called_once_with(2,discussion_only=True)
+
     def test_slow_inventory_does_not_duplicate_a_review_queued_during_poll(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
@@ -77,7 +100,9 @@ class AutomationTests(unittest.TestCase):
             evidence = Evidence(Path(directory) / 'evidence')
             previous = {'number': 2, 'head_sha': 'a', 'base_ref': 'main',
                         'head_repo': 'o/fork', 'updated_at': 'old', 'body': 'Proof missing', 'files': []}
-            proof = {'number': 2, 'head_sha': 'a', 'reviewed_pr_evidence': evidence.put(previous)}
+            proof = {'number': 2, 'head_sha': 'a', 'main_sha': 'm' * 40,
+                     'actions': [{'kind': 'review', 'event': 'APPROVE'}],
+                     'reviewed_pr_evidence': evidence.put(previous)}
             prior = [{'id': 'analysis', 'state': 'stale', 'head_sha': 'a',
                       'result': {'evidence_record': evidence.put(proof)}}]
             current = {**previous, 'updated_at': 'new', 'body': 'Live behavior proof attached'}
