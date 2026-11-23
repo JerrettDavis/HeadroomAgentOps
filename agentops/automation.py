@@ -330,6 +330,14 @@ class AutoReview:
                                               'source_job': decision['source_job']})
                             continue
                     selected.append(pr['number'])
+            # Evidence collection can outlast a manual launch or a recovery.
+            # Recheck the ledger before dispatching from the older inventory.
+            assigned = {j['number'] for j in self.launcher.ledger.jobs()
+                        if j['repo'] == self.data['repo'] and j.get('state') in ('queued', 'running')
+                        and not j.get('stale') and not run_info(j).get('stopped')
+                        and j.get('main_sha') == snapshot['main_sha']
+                        and current.get(str(j['number']), {}).get('head') == j['head_sha']}
+            selected = [number for number in selected if number not in assigned]
             self.data.update(seen=current, initialized=True, last_poll=time.time(),
                              attention=attention, eligible=len(selected))
             self.save()

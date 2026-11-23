@@ -11,6 +11,19 @@ from agentops.evidence import Evidence
 
 
 class AutomationTests(unittest.TestCase):
+    def test_slow_inventory_does_not_duplicate_a_review_queued_during_poll(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'new_prs': True})
+            auto.data.update(initialized=True, seen={})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.ledger.jobs.side_effect = [[], [{'repo':'o/r','number':2,'head_sha':'a',
+                'main_sha':'m'*40,'state':'queued','stale':False,'run_id':'manual'}]]
+            launcher.ledger.get_run.return_value = {'stopped':False,'config':{}}
+            auto.tick()
+            launcher.launch.assert_not_called()
+            self.assertEqual(auto.status()['eligible'], 0)
+
     def test_context_only_read_cannot_supply_changed_head_file_coverage(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
