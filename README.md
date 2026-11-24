@@ -72,6 +72,12 @@ PRs with merge conflicts or failed CI are excluded from both the list and stack
 outline; they still block their dependants. Pending or unknown CI remains visible
 as needing attention.
 
+**PR auto-stacker** prepares selected eligible PRs together with automatic
+prerequisite inclusion and cumulative Git conflict checks. Preparation makes no
+model calls. Publish the combined draft PR with a separate click, then review its
+CI and merge on GitHub. See [PR auto-stacker](docs/pr-auto-stacker.md) for optional
+isolated validation, freshness checks and recovery.
+
 Maintainer status uses GitHub's owner/member/collaborator author association.
 Dependency and fix/feature categories use labels or conventional commit titles.
 Main-CI repairs need a `fixes-main-ci`, `fix-main-ci` or `main-ci-fix` label, or an

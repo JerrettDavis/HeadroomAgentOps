@@ -29,35 +29,37 @@
 **Files:** Create `agentops/stacking.py`, `tests/test_stacking.py`.
 **Interfaces:** `plan_stack(inventory, numbers)` returns pinned ordered members and blockers. `StackStore(path)` supplies create/get/list/update/claim backed by a separate table in the existing SQLite file.
 
-- [ ] Write tests for stable ordering, prerequisite inclusion, cycles, missing evidence, invalid selection and idempotent pinned identity; run and observe missing implementation failure.
-- [ ] Implement the planner using existing dependency parsing and stable topological ordering; persist records with transactional compare-and-set transitions and process ownership.
-- [ ] Run `python -m unittest discover -s tests -p test_stacking.py`; expected PASS. Commit task.
+- [x] Write tests for stable ordering, prerequisite inclusion, cycles, missing evidence, invalid selection and idempotent pinned identity; run and observe missing implementation failure.
+- [x] Implement the planner using existing dependency parsing and stable topological ordering; persist records with transactional compare-and-set transitions and process ownership.
+- [x] Run `python -m unittest discover -s tests -p test_stacking.py`; expected PASS. Commit task.
 
 ### Task 2: Git integration and isolated validation
 
 **Files:** Create `agentops/stack_git.py`, `tests/test_stack_git.py`.
 **Interfaces:** `GitStack(root, repo, ...)` exposes `prepare(record, progress)` returning revision, member results, conflicts and validation. `publish_branch(record)` writes only its dedicated branch after verifying the exact prepared revision.
 
-- [ ] Write real temporary-Git tests for compatible edits, cumulative conflicts, pinned-head mismatch, dependency ancestry, repeat reuse, and source-commit preservation; observe failure.
-- [ ] Implement a private checkout, batched ref fetch, SHA verification and hook-free sequential merges with deterministic commit metadata. Preserve the pristine integration checkout; run configured argv commands in a separate no-network Docker container without auth, with bounded logs and execution time. Missing commands remain unconfigured.
-- [ ] Test Docker argument isolation, failure and timeout outcomes, and ensure validation changes never enter the published Git revision.
-- [ ] Run `python -m unittest discover -s tests -p 'test_stack_git.py'`; expected PASS. Commit task.
+- [x] Write real temporary-Git tests for compatible edits, cumulative conflicts, pinned-head mismatch, dependency ancestry, repeat reuse, and source-commit preservation; observe failure.
+- [x] Implement a private checkout, batched ref fetch, SHA verification and hook-free sequential merges with deterministic commit metadata. Preserve the pristine integration checkout; run configured argv commands in a separate no-network Docker container without auth, with bounded logs and execution time. Missing commands remain unconfigured.
+- [x] Test Docker argument isolation, failure and timeout outcomes, and ensure validation changes never enter the published Git revision.
+- [x] Run `python -m unittest discover -s tests -p 'test_stack_git.py'`; expected PASS. Commit task.
 
 ### Task 3: Preparation service and guarded publication
 
 **Files:** Create `agentops/stack_service.py`, `tests/test_stack_service.py`; modify `agentops/merge_priority.py` to expose optional full normalized inventory without changing its default response.
 **Interfaces:** `StackService(path, config, github, ...)` exposes `prepare(request)`, `publish(request)`, and `status()`; consumes Task 1 records and Task 2 Git engine.
 
-- [ ] Write tests for durable background progress, bounded concurrent preparations, repeat requests, stale head/base/approval/CI, failed refresh, publish-disabled policy, existing-branch/PR recovery and interrupted owners; observe failure.
-- [ ] Implement non-model preparation with one active operation, fresh inventory checks at publication, dedicated branch ownership verification and paginated PR discovery by head. Persist publication intent before writes; reconcile ambiguous results on retry. Always create draft PRs and never merge. Refresh published aggregate/source state on explicit request.
-- [ ] Run `python -m unittest discover -s tests -p test_stack_service.py`; expected PASS. Commit task.
+- [x] Write tests for durable background progress, bounded concurrent preparations, repeat requests, stale head/base/approval/CI, failed refresh, publish-disabled policy, existing-branch/PR recovery and interrupted owners; observe failure.
+- [x] Implement non-model preparation with one active operation, fresh inventory checks at publication, dedicated branch ownership verification and paginated PR discovery by head. Persist publication intent before writes; reconcile ambiguous results on retry. Always create draft PRs and never merge. Refresh published aggregate/source state on explicit request.
+- [x] Run `python -m unittest discover -s tests -p test_stack_service.py`; expected PASS. Commit task.
 
 ### Task 4: Dashboard, API and operator documentation
 
-**Files:** Modify `agentops/panel.py`, `agentops/panel.html`, `agentops/ui/merge-priority.js`, `tests/test_panel.py`, `tests/ui/serve.py`; create `agentops/ui/stacking.js`, `tests/ui/stacking.spec.cjs`, `docs/pr-auto-stacker.md`; update `agentops.example.toml`.
+**Files:** Modify `agentops/panel.py`, `agentops/panel.html`, `agentops/ui/merge-priority.js`; create `agentops/ui/stacking.js`, `tests/ui/stacking.spec.cjs`, `tests/test_stack_panel.py`, `docs/pr-auto-stacker.md`; update `agentops.example.toml`.
 **Interfaces:** GET `/api/stacks`; protected POST `/api/stacks/prepare`, `/api/stacks/publish`, `/api/stacks/refresh`. Browser selection submits integer PR numbers; server determines dependencies, evidence and identities.
 
-- [ ] Write API/browser tests for human-only publication, selection with prerequisites, progress/conflicts/logs, freshness failures and safe links/text; observe failures.
-- [ ] Add selection controls to priority view and a durable stack panel with explicit Prepare and Publish draft PR buttons, pinned members, validation logs and GitHub merge link. Keep existing layout/style and keyboard behavior.
-- [ ] Document configuration, algorithm, validation limits, draft publication, source PR cleanup, recovery and zero model use.
-- [ ] Run complete Python suite and Playwright suite; expected PASS (document explicit environment skips). Obtain whole-branch review, resolve findings, and commit.
+- [x] Write API/browser tests for human-only publication, selection with prerequisites, progress/conflicts/logs, freshness failures and safe links/text; observe failures.
+- [x] Add selection controls to priority view and a durable stack panel with explicit Prepare and Publish draft PR buttons, pinned members, validation logs and GitHub merge link. Keep existing layout/style and keyboard behavior.
+- [x] Document configuration, algorithm, validation limits, draft publication, source PR cleanup, recovery and zero model use.
+- [x] Run complete Python suite and Playwright suite; expected PASS (document explicit environment skips). Obtain whole-branch review, resolve findings, and commit.
+
+Final evidence and plan adjustments: `docs/superpowers/specs/2026-11-24-pr-auto-stacker-verification.md`. Final source base is eb4ccdc; 409 Python tests (Docker enabled, no skips) and 30 browser tests pass.
