@@ -1,12 +1,25 @@
 import base64
 import hashlib
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from agentops.github import GitHub
 
 
 class ReviewBlobTests(unittest.TestCase):
+    def test_git_object_identity_works_when_security_sha1_is_disabled(self):
+        data = b'print("hello")\n'
+        original = hashlib.sha1
+        sha = original(b'blob ' + str(len(data)).encode() + b'\0' + data, usedforsecurity=False).hexdigest()
+        github = GitHub('o/r', runner=Mock(return_value={
+            'sha': sha, 'encoding': 'base64', 'content': base64.b64encode(data).decode()}))
+        def restricted_sha1(value, *, usedforsecurity=True):
+            if usedforsecurity:
+                raise ValueError('Security SHA1 disabled')
+            return original(value, usedforsecurity=False)
+        with patch('agentops.github.hashlib.sha1', restricted_sha1):
+            self.assertEqual(github.review_blob(sha), data.decode())
+
     def test_base_content_pins_base_commit_and_uses_verified_blob(self):
         github = GitHub('o/r', runner=Mock(side_effect=[
             {'merge_base_commit': {'sha': 'c' * 40}}, {'type': 'file', 'sha': 'a' * 40}]))

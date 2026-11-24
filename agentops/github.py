@@ -116,7 +116,9 @@ class GitHub:
             data = base64.b64decode(value['content'])
             if len(data) > 1048576:
                 raise ValueError('Oversized review blob')
-            actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+            # SHA1 is Git's object format, not a selected security primitive.
+            actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data,
+                                  usedforsecurity=False).hexdigest()
             if actual != sha:
                 raise ValueError('Review blob hash mismatch')
             self._source_cache[key] = data.decode('utf8')
