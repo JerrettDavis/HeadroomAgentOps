@@ -1,0 +1,109 @@
+name: Bot auto-merge
+'on':
+  pull_request_target:
+    types:
+    - opened
+    - reopened
+    - synchronize
+    - ready_for_review
+    - labeled
+    - edited
+  workflow_dispatch: {}
+  workflow_run:
+    workflows:
+    - CI
+    - Label PR
+    - Sync labels
+    - Release
+    - Security
+    types:
+    - completed
+permissions:
+  actions: read
+  checks: read
+  statuses: read
+  contents: write
+  pull-requests: write
+concurrency:
+  group: bot-automerge-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  enable:
+    if: github.repository_owner == 'JerrettDavis'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Merge trusted bot PRs after validation
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+      with:
+        script: |
+          // Executed only as trusted workflow code; never checks out or evaluates PR code.
+          const {owner, repo} = context.repo;
+          const fullName = `${owner}/${repo}`;
+          const repository = (await github.rest.repos.get({owner, repo})).data;
+          if (owner !== 'JerrettDavis' || repository.owner.type !== 'User' ||
+              repository.fork || repository.archived) {
+            throw new Error('Repository is outside the authorized personal-repository scope');
+          }
+          const hasPrValidation = true;
+          const expectedPrWorkflows = [".github/workflows/ci.yml", ".github/workflows/security.yml"];
+          const numbers = context.eventName === 'pull_request_target'
+            ? [context.payload.pull_request.number]
+            : (await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', base: repository.default_branch, per_page: 100
+              })).map(pr => pr.number);
+          for (const pull_number of numbers) {
+            const pr = (await github.rest.pulls.get({owner, repo, pull_number})).data;
+            if (pr.state !== 'open' || pr.draft || pr.user.type !== 'Bot' ||
+                pr.head.repo?.full_name !== fullName || pr.base.repo.full_name !== fullName ||
+                pr.base.ref !== repository.default_branch) continue;
+            const ref = pr.head.sha;
+            const checks = await github.paginate(github.rest.checks.listForRef,
+              {owner, repo, ref, per_page: 100});
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef,
+              {owner, repo, ref, per_page: 100});
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo,
+              {owner, repo, head_sha: ref, event: 'pull_request', per_page: 100});
+            const accepted = new Set(['success', 'neutral', 'skipped']);
+            const latestStatus = new Map();
+            // GitHub returns statuses newest first; older failures must not override a retry.
+            for (const status of statuses) {
+              if (!latestStatus.has(status.context)) latestStatus.set(status.context, status);
+            }
+            const latestRun = new Map();
+            for (const run of runs) {
+              const key = `${run.workflow_id}:${run.event}`;
+              if (!latestRun.has(key) || latestRun.get(key).id < run.id) latestRun.set(key, run);
+            }
+            if (expectedPrWorkflows.some(path => !runs.some(r => r.path?.split('@')[0] === path))) {
+              core.info(`PR #${pull_number}: waiting for configured PR workflows`);
+              continue;
+            }
+            if (hasPrValidation && checks.length === 0 && latestStatus.size === 0 && runs.length === 0) {
+              core.info(`PR #${pull_number}: waiting for CI to register`);
+              continue;
+            }
+            if (checks.some(c => c.status !== 'completed' || !accepted.has(c.conclusion)) ||
+                [...latestStatus.values()].some(s => s.state !== 'success') ||
+                [...latestRun.values()].some(r => r.status !== 'completed' || !accepted.has(r.conclusion))) {
+              core.info(`PR #${pull_number}: waiting for successful checks`);
+              continue;
+            }
+            const method = repository.allow_squash_merge ? 'squash'
+              : repository.allow_merge_commit ? 'merge' : 'rebase';
+            const branch = (await github.rest.repos.getBranch({
+              owner, repo, branch: repository.default_branch
+            })).data;
+            // GitHub enforces protected-branch reviews and checks; never request admin bypass.
+            if (branch.protected) {
+              const fresh = (await github.rest.pulls.get({owner, repo, pull_number})).data;
+              if (fresh.head.sha !== ref || fresh.state !== 'open' || fresh.draft) continue;
+              await github.graphql(`mutation($id:ID!,$method:PullRequestMergeMethod!,$sha:GitObjectID!) {
+                enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$method,expectedHeadOid:$sha}) {
+                  pullRequest {number autoMergeRequest {enabledAt}}
+                }
+              }`, {id: pr.node_id, method: method.toUpperCase(), sha: ref});
+            } else {
+              await github.rest.pulls.merge({owner, repo, pull_number, sha: ref, merge_method: method});
+            }
+            core.info(`PR #${pull_number}: normal bot automerge requested for ${ref}`);
+          }
