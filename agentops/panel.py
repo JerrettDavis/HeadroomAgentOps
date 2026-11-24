@@ -348,7 +348,14 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
     comparisons = {}
     priority = priority_monitor or PriorityMonitor(lambda: collect_priority(launcher.github, comparisons))
     from .stack_service import StackService
-    stacks = stack_service or StackService(path, launcher.config, launcher.github)
+    stack_holder = [stack_service]
+    import threading
+    stack_lock = threading.Lock()
+    def stacks():
+        with stack_lock:
+            if stack_holder[0] is None:
+                stack_holder[0] = StackService(path, launcher.config, launcher.github)
+            return stack_holder[0]
     from .automation import AutoReview
     automation = AutoReview(launcher)
     from .allowance_monitor import AllowanceMonitor
@@ -385,11 +392,11 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                 elif self.path == '/api/allowances':
                     result = allowances.configure(payload)
                 elif self.path == '/api/stacks/prepare':
-                    result = stacks.prepare(payload)
+                    result = stacks().prepare(payload)
                 elif self.path == '/api/stacks/publish':
-                    result = stacks.publish(payload)
+                    result = stacks().publish(payload)
                 elif self.path == '/api/stacks/refresh':
-                    result = stacks.refresh(payload)
+                    result = stacks().refresh(payload)
                 else:
                     self.send_error(404)
                     return
@@ -434,7 +441,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
             elif url.path == '/api/merge-priority':
                 body = redact(json.dumps(priority.status(), ensure_ascii=False)).encode()
             elif url.path == '/api/stacks':
-                body = redact(json.dumps(stacks.status(), ensure_ascii=False)).encode()
+                result = stack_holder[0].status() if stack_holder[0] else StackService.peek(path, launcher.config)
+                body = redact(json.dumps(result, ensure_ascii=False)).encode()
             elif url.path == '/api/allowances':
                 try:
                     body = json.dumps(allowances.status(refresh=True), allow_nan=False).encode()
@@ -478,7 +486,6 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
     else:
         server = ThreadingHTTPServer((host, port), Handler)
     server.automation = automation
-    server.stacks = stacks
     return server
 
 

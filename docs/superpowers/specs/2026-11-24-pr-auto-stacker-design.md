@@ -30,23 +30,17 @@ must perform that integration check rather than treating ranking as validation.
 6. Present the exact prepared revision and membership for human review. Changes
    to a source head or target branch invalidate readiness and require preparation
    again. A failed refresh must not preserve a misleading ready indicator.
-7. A human explicitly publishes or initiates merging through the dashboard.
+7. A human explicitly publishes the draft through the dashboard, then reviews
+   and merges it on GitHub.
    Recheck current revisions and required gates at the action boundary.
 
-## Final merge workflow: decision needed
+## Approved final merge workflow
 
-Recommended proposal: publish a dedicated integration branch and combined PR.
+Publish a dedicated integration branch and combined draft PR.
 CI and branch protection apply to the actual combined revision, and the human
 merges that PR on GitHub. Keep the original PR links and pinned revisions in its
 description. Original PR closure and attribution need explicit handling; do not
 claim that merging an aggregate automatically marks each source PR merged.
-
-Alternative: the human starts a batch of original PR merges. This preserves each
-original PR's merge history, but is not atomic. Record each successful merge,
-revalidate remaining PRs after base changes, and stop on any failed gate or
-changed revision. Never imply that a partially completed batch can be rolled back
-automatically. A local integration result alone does not authorize bypassing the
-repository's individual PR gates.
 
 ## Implementation constraints and proposed defaults
 
@@ -73,7 +67,7 @@ Builder-check defaults (proposed implementation choices):
   publish a conflict-free draft integration PR to obtain GitHub CI; only current
   GitHub checks and repository protection determine merge eligibility. Publication
   and merge readiness must therefore be separate states.
-- If the combined-PR workflow is selected, preserve source commits using merges
+- Preserve source commits using merges
   rather than squash/cherry-pick during preparation. Record source PR links and
   authors. After the aggregate merges, refresh GitHub's source PR states and show
   any still-open PRs for human cleanup; do not automatically close them. Make this

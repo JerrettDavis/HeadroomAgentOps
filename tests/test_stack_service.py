@@ -112,6 +112,29 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(blocked['state'], 'blocked')
         self.assertEqual(self.engine.prepares, 1)
 
+    def test_two_panels_cannot_replace_an_active_preparation_owner(self):
+        record = self.prepared()
+        def collect():
+            result = self.collect()
+            self.service.store.claim(record['id'], 'another panel', ['prepared'], state='publishing')
+            return result
+        self.service.collect = collect
+        self.engine.gate = threading.Event()
+        caught = None
+        try:
+            self.service.prepare({'numbers': [1, 2]})
+        except ValueError as error:
+            caught = error
+        finally:
+            observed = self.service.store.get(record['id'])
+            self.service.collect = self.collect
+            self.engine.gate.set()
+            self.service.close()
+        self.assertIsNotNone(caught)
+        self.assertEqual(observed['state'], 'publishing')
+        self.assertEqual(observed['owner'], 'another panel')
+        self.assertEqual(self.engine.prepares, 1)
+
     def test_human_publication_is_draft_and_idempotent(self):
         record = self.prepared()
         published = self.service.publish({'id': record['id']})
@@ -175,6 +198,15 @@ class ServiceTests(unittest.TestCase):
         with patch('agentops.stack_service.owner_state', return_value='unknown'):
             self.service.recover()
         self.assertEqual(self.service.store.get(record['id'])['state'], 'publishing')
+
+    def test_dashboard_peek_never_creates_or_mutates_ledger(self):
+        missing = Path(self.tmp.name) / 'missing.sqlite3'
+        self.assertEqual(StackService.peek(missing, self.config)['stacks'], [])
+        self.assertFalse(missing.exists())
+        record = self.prepared()
+        before = self.path.read_bytes()
+        self.assertEqual(StackService.peek(self.path, self.config)['stacks'][0]['id'], record['id'])
+        self.assertEqual(self.path.read_bytes(), before)
 
     def test_unrelated_branch_and_disabled_policy_block_publication(self):
         record = self.prepared()

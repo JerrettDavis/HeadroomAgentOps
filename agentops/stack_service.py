@@ -1,5 +1,7 @@
 """Bounded mechanical preparation and human-triggered aggregate PR publication."""
 import json
+from contextlib import closing
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -34,7 +36,7 @@ class StackService:
         self.recover()
 
     def recover(self):
-        for record in self.store.list():
+        for record in self.store.active():
             if record['state'] in ACTIVE and owner_state(record['owner'] or '') == 'missing':
                 self.store.update(record['id'], {'state': 'publication_unknown' if record['state'] == 'publishing'
                                                 else 'interrupted', 'phase': 'Prior process exited; explicit retry required'},
@@ -70,24 +72,13 @@ class StackService:
     def prepare(self, request):
         with self.lock:
             self.recover()
-            if any(r['state'] in ACTIVE for r in self.store.list()):
+            if self.store.active():
                 raise ValueError('Another stack operation is active')
             plan = self._plan(request.get('numbers'))
-            record = self.store.create(plan)
-            if record['state'] in ('prepared', 'published', 'publication_unknown'):
-                if plan['blockers']:
-                    record = self.store.update(record['id'], {'state': 'stale', 'blockers': plan['blockers']})
-                elif record['state'] == 'prepared':
-                    record = self.store.update(record['id'], {'verified_at': time.time()})
+            plan['initiator'] = 'local dashboard user'
+            record, started = self.store.begin_preparation(plan, self.owner)
+            if not started:
                 return self.public(record)
-            record = self.store.update(record['id'], {**plan, 'initiator': 'local dashboard user',
-                                                       'verified_at': time.time(), 'error': None})
-            if plan['blockers']:
-                return self.public(record)
-            if not self.store.claim(record['id'], self.owner,
-                                    ['planned', 'failed', 'interrupted', 'stale', 'validation_failed', 'conflict'],
-                                    exclusive=True):
-                raise ValueError('Stack operation already started')
             self.thread = threading.Thread(target=self._prepare, args=(record['id'],),
                                            name='stack-preparation', daemon=True)
             self.thread.start()
@@ -114,13 +105,29 @@ class StackService:
                                               'prerequisites', 'ci', 'review_decision') if k in p}
                              for p in record['members']]
         result['fresh'] = time.time() - record.get('verified_at', 0) < 180
+        if record['state'] in ACTIVE and owner_state(record.get('owner') or '') == 'missing':
+            result.update(state='publication_unknown' if record['state'] == 'publishing' else 'interrupted',
+                          fresh=False, phase='Prior process exited; explicit retry required')
         return result
 
     def status(self):
-        self.recover()
         return {'repo': self.config['repo'], 'publish_enabled': self.config.get('publish') is True,
                 'model_calls': 0, 'stacks': [self.public(r) for r in self.store.list()
                                           if r['repo'].lower() == self.config['repo'].lower()]}
+
+    @classmethod
+    def peek(cls, path, config):
+        """Dashboard GETs never create/migrate a ledger or alter existing records."""
+        records = []
+        path = Path(path).resolve()
+        if path.exists():
+            with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=5)) as db:
+                db.row_factory = sqlite3.Row
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='merge_stacks'").fetchone():
+                    records = [StackStore._decode(row) for row in db.execute(
+                        'SELECT * FROM merge_stacks ORDER BY created DESC LIMIT 100')]
+        return {'repo': config['repo'], 'publish_enabled': config.get('publish') is True, 'model_calls': 0,
+                'stacks': [cls.public(r) for r in records if r['repo'].lower() == config['repo'].lower()]}
 
     def _branch(self, record):
         branch = 'agentops/stacks/' + record['id']
@@ -156,6 +163,7 @@ class StackService:
         if self.config.get('publish') is not True:
             raise ValueError('Publication is disabled by panel configuration')
         with self.lock:
+            self.recover()
             record = self._record(request)
             if record['state'] == 'published':
                 return self.public(record)
@@ -197,7 +205,7 @@ class StackService:
                     ])
                     attempted_write = True
                     pr = self.github.request('POST', f'repos/{self.github.repo}/pulls',
-                                             {'title': f'PR stack: ' + ', '.join('#' + str(p['number']) for p in record['members']),
+                                             {'title': ('PR stack: ' + ', '.join('#' + str(p['number']) for p in record['members']))[:250],
                                               'head': branch, 'base': record['target_branch'], 'body': body, 'draft': True})
                     result = {**self._receipt(pr), 'verified_at': verified, 'publication_initiator': actor}
                 return self.public(self.store.update(record['id'], {**result, 'error': None,
@@ -210,6 +218,7 @@ class StackService:
 
     def refresh(self, request):
         with self.lock:
+            self.recover()
             record = self._record(request)
             previous = record['state']
             if not self.store.claim(record['id'], self.owner,

@@ -124,6 +124,37 @@ class StackStore:
         with self.ledger.connect() as db:
             return [self._decode(row) for row in db.execute('SELECT * FROM merge_stacks ORDER BY created DESC LIMIT 100')]
 
+    def active(self):
+        with self.ledger.connect() as db:
+            return [self._decode(row) for row in db.execute(
+                "SELECT * FROM merge_stacks WHERE state IN ('preparing','publishing','checking')")]
+
+    def begin_preparation(self, plan, owner):
+        """Apply fresh planning evidence and acquire ownership in one transaction."""
+        now = time.time()
+        with self.ledger.connect(immediate=True) as db:
+            row = db.execute('SELECT * FROM merge_stacks WHERE id=?', (plan['id'],)).fetchone()
+            record = self._decode(row) if row else None
+            if record and record['state'] in ('preparing', 'publishing', 'checking'):
+                raise ValueError('Another stack operation is active')
+            if record and record['state'] in ('published', 'publication_unknown'):
+                return record, False
+            if record and record['state'] == 'prepared' and not plan['blockers']:
+                record['verified_at'] = now
+                db.execute('UPDATE merge_stacks SET data=?,updated=? WHERE id=?',
+                           (json.dumps(record), now, plan['id']))
+                return {**record, 'updated': now}, False
+            if db.execute("SELECT 1 FROM merge_stacks WHERE state IN "
+                          "('preparing','publishing','checking') LIMIT 1").fetchone():
+                raise ValueError('Another stack operation is active')
+            record = {**(record or {}), **plan, 'state': 'blocked' if plan['blockers'] else 'preparing',
+                      'owner': owner, 'verified_at': now, 'error': None,
+                      'created': record['created'] if record else now, 'updated': now}
+            db.execute('INSERT INTO merge_stacks VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
+                       'state=excluded.state,owner=excluded.owner,data=excluded.data,updated=excluded.updated',
+                       (record['id'], record['state'], owner, json.dumps(record), record['created'], now))
+            return record, record['state'] == 'preparing'
+
     def claim(self, identity, owner, states, state='preparing', exclusive=False):
         with self.ledger.connect(immediate=True) as db:
             if exclusive and db.execute("SELECT 1 FROM merge_stacks WHERE state IN "
