@@ -124,8 +124,11 @@ class StackStore:
         with self.ledger.connect() as db:
             return [self._decode(row) for row in db.execute('SELECT * FROM merge_stacks ORDER BY created DESC LIMIT 100')]
 
-    def claim(self, identity, owner, states, state='preparing'):
+    def claim(self, identity, owner, states, state='preparing', exclusive=False):
         with self.ledger.connect(immediate=True) as db:
+            if exclusive and db.execute("SELECT 1 FROM merge_stacks WHERE state IN "
+                                        "('preparing','publishing','checking') LIMIT 1").fetchone():
+                raise ValueError('Another stack operation is active')
             marks = ','.join('?' for _ in states)
             return db.execute(f'UPDATE merge_stacks SET state=?,owner=?,updated=? WHERE id=? AND state IN ({marks})',
                               (state, owner, time.time(), identity, *states)).rowcount == 1
