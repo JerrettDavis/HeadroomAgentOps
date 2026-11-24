@@ -16,6 +16,13 @@ timeout_seconds = 3600
 packet_budget = 24576
 poll_seconds = 5
 
+# PR auto-stacker is algorithmic and never invokes a model or merges a PR.
+# Optional local validation runs without network/auth in an isolated container.
+# Omitted commands are shown as unconfigured; the published draft uses GitHub CI.
+# [stacking]
+# commands = [["python3", "-m", "unittest", "discover", "-s", "tests"]]
+# timeout_seconds = 900
+
 # Shared dashboard settings override these initial provider stop points.
 # New reviews wait at this percentage used; running reviews finish normally.
 [provider_limits.codex]

@@ -2,9 +2,10 @@ import json
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from agentops.stack_git import GitStack, validate_commands
+from agentops.stack_git import GitStack, validate_commands, bounded_process
 from agentops.stacking import plan_stack
 from test_stacking import inventory
 
@@ -98,6 +99,39 @@ class IntegrationTests(GitFixture):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_commands(value)
         self.assertEqual(validate_commands([['python3', '-m', 'unittest']]), [['python3', '-m', 'unittest']])
+
+    def test_noisy_validation_output_is_bounded_and_timeout_is_reported(self):
+        import sys
+        code, timed_out, log = bounded_process([sys.executable, '-c',
+                                               'import sys;sys.stdout.write("x"*100000+"tail")'], 5)
+        self.assertEqual(code, 0)
+        self.assertFalse(timed_out)
+        self.assertLessEqual(len(log), 16000)
+        self.assertTrue(log.endswith('tail'))
+        code, timed_out, log = bounded_process([sys.executable, '-c', 'import time;time.sleep(5)'], 1)
+        self.assertTrue(timed_out)
+        self.assertIsNone(code)
+
+    def test_docker_validation_has_no_credentials_network_or_default_agent_entrypoint(self):
+        calls = []
+        def run(args, **kwargs):
+            calls.append(args)
+            return 'sha256:' + 'a' * 64 if args[1:3] == ['image', 'inspect'] else ''
+        with patch('agentops.stack_git.command', run), patch('agentops.stack_git.bounded_process',
+                                                           return_value=(1, False, 'test failed')):
+            result = self.engine().validate(self.repo, [['python3', '-m', 'unittest']])
+            self.assertEqual(result['state'], 'failed')
+        # Inspect the actual container command at its process boundary.
+        with patch('agentops.stack_git.command', run), patch('agentops.stack_git.bounded_process') as process:
+            process.return_value = (None, True, 'timeout')
+            result = self.engine().validate(self.repo, [['python3', '-m', 'unittest']])
+            args = process.call_args.args[0]
+            self.assertIn('--read-only', args)
+            self.assertEqual(args[args.index('--network') + 1], 'none')
+            self.assertEqual(args[args.index('--entrypoint') + 1], 'python3')
+            self.assertNotIn('/job/auth', ' '.join(args))
+            self.assertTrue(result['commands'][0]['timed_out'])
+        self.assertTrue(any(args[1:3] == ['rm', '--force'] for args in calls))
 
 
 if __name__ == '__main__':

@@ -155,6 +155,27 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(self.github.writes), 1)
         self.assertEqual(self.engine.pushes, 1)
 
+    def test_uncertain_publication_recheck_recovers_even_after_target_moves(self):
+        record = self.prepared()
+        self.github.fail_create = True
+        with self.assertRaises(RuntimeError):
+            self.service.publish({'id': record['id']})
+        self.github.data['default_sha'] = 'e' * 40
+        self.assertEqual(self.service.refresh({'id': record['id']})['pr_number'], 90)
+        self.assertEqual(len(self.github.writes), 1)
+
+    def test_dead_preparation_owner_is_recoverable_but_live_owner_is_not_stolen(self):
+        from unittest.mock import patch
+        record = self.prepared()
+        self.service.store.update(record['id'], {'state': 'preparing', 'owner': 'dead owner'})
+        with patch('agentops.stack_service.owner_state', return_value='missing'):
+            self.service.recover()
+        self.assertEqual(self.service.store.get(record['id'])['state'], 'interrupted')
+        self.service.store.update(record['id'], {'state': 'publishing', 'owner': 'live owner'})
+        with patch('agentops.stack_service.owner_state', return_value='unknown'):
+            self.service.recover()
+        self.assertEqual(self.service.store.get(record['id'])['state'], 'publishing')
+
     def test_unrelated_branch_and_disabled_policy_block_publication(self):
         record = self.prepared()
         self.github.refs = [{'ref': 'refs/heads/agentops/stacks/' + record['id'], 'object': {'sha': 'e' * 40}}]

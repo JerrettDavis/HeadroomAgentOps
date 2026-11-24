@@ -1,14 +1,45 @@
 """Mechanical stack integration. Repository code runs only in a credential-free container."""
-import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 
 from .process import command
 from .redaction import redact
+
+
+def bounded_process(args, timeout):
+    """Drain output continuously, retaining only its tail rather than filling disk/RAM."""
+    tail = bytearray()
+    lock = threading.Lock()
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    def drain():
+        while True:
+            chunk = process.stdout.read(4096)
+            if not chunk:
+                break
+            with lock:
+                tail.extend(chunk)
+                del tail[:-16000]
+    reader = threading.Thread(target=drain, daemon=True, name='stack-validation-log')
+    reader.start()
+    timed_out, code = False, None
+    try:
+        code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        process.wait(timeout=10)
+    reader.join(timeout=5)
+    if not reader.is_alive():
+        process.stdout.close()
+    with lock:
+        log = redact(bytes(tail).decode('utf8', errors='replace'))
+    return code, timed_out, log
 
 
 def validate_commands(commands):
@@ -29,7 +60,7 @@ class GitStack:
             raise ValueError('Stack validation timeout must be 1..3600 seconds')
         self.root, self.repo = Path(root).resolve(), repo
         self.remote = remote or f'https://github.com/{repo}.git'
-        self.commands = validate_commands(commands or [])
+        self.commands = validate_commands([] if commands is None else commands)
         self.image, self.timeout = image, timeout
         self.validator = validator or self.validate
 
@@ -108,7 +139,6 @@ class GitStack:
         results = []
         for argv in commands:
             name = 'agentops-stack-' + uuid.uuid4().hex
-            log_path = checkout.parent / (name + '.log')
             args = ['docker', 'run', '--name', name, '--network', 'none', '--read-only',
                     '--cap-drop=ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512',
                     '--memory', '8g', '--cpus', '2', '--user', f'{uid}:{gid}',
@@ -116,22 +146,15 @@ class GitStack:
                     '--tmpfs', f'/home/node:rw,nosuid,exec,uid={uid},gid={gid},size=1g',
                     '--env', 'HOME=/home/node', '--env', 'GIT_CONFIG_NOSYSTEM=1',
                     '--env', 'GIT_CONFIG_GLOBAL=/dev/null', '--workdir', '/workspace',
+                    '--env', 'GIT_CONFIG_COUNT=1', '--env', 'GIT_CONFIG_KEY_0=safe.directory',
+                    '--env', 'GIT_CONFIG_VALUE_0=/workspace',
                     '--mount', f'type=bind,src={checkout},dst=/workspace',
                     '--entrypoint', argv[0], image, *argv[1:]]
-            code, timed_out = None, False
             try:
-                with log_path.open('wb') as log:
-                    result = subprocess.run(args, stdout=log, stderr=subprocess.STDOUT, timeout=self.timeout,
-                                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-                    code = result.returncode
-            except subprocess.TimeoutExpired:
-                timed_out = True
+                code, timed_out, tail = bounded_process(args, self.timeout)
             finally:
                 # A killed Docker client does not imply its container stopped.
                 command(['docker', 'rm', '--force', name], timeout=60)
-            with log_path.open('rb') as log:
-                log.seek(max(0, log_path.stat().st_size - 16000))
-                tail = redact(log.read().decode('utf8', errors='replace'))
             results.append({'argv': argv, 'exit_code': code, 'timed_out': timed_out, 'log': tail})
             if code != 0:
                 return {'state': 'failed', 'image': image, 'commands': results}

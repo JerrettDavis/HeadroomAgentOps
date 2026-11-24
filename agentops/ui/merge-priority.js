@@ -67,13 +67,15 @@
       const title = `#${row.number} ${row.title}`;
       return `<li class="priority-row" data-number="${escape(row.number)}" data-parent="${escape(row.parent ?? '')}" data-ready="${readyNow}" style="--depth:${depth}">
         <span class="priority-order" aria-label="${readyNow || after ? 'Suggested merge position ' + escape(row.merge_order) : 'No merge position yet'}">${readyNow || after ? escape(row.merge_order) : '—'}</span>
-        <div class="priority-body">${githubLink(row.url, title, 'priority-title')}
+        <div class="priority-body"><label class="stack-select"><input type="checkbox" data-stack-number="${escape(row.number)}" aria-label="Include PR #${escape(row.number)} in stack" ${readyNow || after ? '' : 'disabled'} ${window.agentopsStacks?.selected.has(row.number) ? 'checked' : ''}> Include in stack</label>${githubLink(row.url, title, 'priority-title')}
         <p class="priority-meta"><span>${escape(row.author)}</span><span>${escape(row.head_ref)} → ${escape(row.base_ref)}</span>${row.depth > 5 ? `<span>Stack depth ${escape(row.depth)}</span>` : ''}</p>
         <div class="badges"><span class="priority-state ${readyNow ? 'good' : ''}">${state}</span>${tag(row.category)}${tag('CI ' + (row.ci || 'unknown'), row.ci === 'failed' ? 'bad' : '')}${tag(row.up_to_date === true ? 'Up to date with base' : row.up_to_date === false ? 'Behind base' : 'Freshness unknown')}${row.draft ? tag('Draft') : ''}${row.review_decision ? tag(row.review_decision.replaceAll('_', ' ').toLowerCase()) : ''}</div>
         ${deps ? `<p class="priority-dependencies">Prerequisites: ${deps}</p>` : ''}
         <p class="priority-reasons">${escape(blockers.length ? blockers.join(' · ') : row.category_reason)}${row.category === 'Main CI fix (declared)' ? ' · Main CI repair is declared; verify the fix during review.' : ''}</p></div></li>`;
     }).join('') || `<li class="empty">${fresh ? 'No approved open PRs without conflicts or failed CI.' : 'Waiting for current approved GitHub PRs. This view needs GitHub sign-in and repository access.'}</li>`;
     byId('priority-view').scrollTop = scrollTop;
+    document.dispatchEvent(new CustomEvent('priority-rendered', {detail: {fresh,
+      eligible: rows.filter(r => fresh && (r.ready || r.ready_after_dependencies)).map(r => r.number)}}));
   }
 
   async function refreshPriority() {

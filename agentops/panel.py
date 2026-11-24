@@ -323,7 +323,7 @@ def archived_diff(root, identity, expected_head, repository):
 
 
 def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=None, usage_identity_reader=None,
-                priority_monitor=None):
+                priority_monitor=None, stack_service=None):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise ValueError('The panel binds to loopback only')
     page = Path(__file__).with_name('panel.html')
@@ -332,6 +332,7 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
         '/ui/purify.js': (page.parent / 'ui' / 'purify.js', 'text/javascript; charset=utf-8'),
         '/ui/markdown.js': (page.parent / 'ui' / 'markdown.js', 'text/javascript; charset=utf-8'),
         '/ui/merge-priority.js': (page.parent / 'ui' / 'merge-priority.js', 'text/javascript; charset=utf-8'),
+        '/ui/stacking.js': (page.parent / 'ui' / 'stacking.js', 'text/javascript; charset=utf-8'),
         '/brand/icon.svg': (page.parent / 'brand' / 'icon.svg', 'image/svg+xml'),
         '/brand/icon.ico': (page.parent / 'brand' / 'icon.ico', 'image/x-icon'),
         '/favicon.ico': (page.parent / 'brand' / 'icon.ico', 'image/x-icon'),
@@ -346,6 +347,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
     from .merge_priority import PriorityMonitor, collect_priority
     comparisons = {}
     priority = priority_monitor or PriorityMonitor(lambda: collect_priority(launcher.github, comparisons))
+    from .stack_service import StackService
+    stacks = stack_service or StackService(path, launcher.config, launcher.github)
     from .automation import AutoReview
     automation = AutoReview(launcher)
     from .allowance_monitor import AllowanceMonitor
@@ -381,6 +384,12 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                     result = automation.configure(payload)
                 elif self.path == '/api/allowances':
                     result = allowances.configure(payload)
+                elif self.path == '/api/stacks/prepare':
+                    result = stacks.prepare(payload)
+                elif self.path == '/api/stacks/publish':
+                    result = stacks.publish(payload)
+                elif self.path == '/api/stacks/refresh':
+                    result = stacks.refresh(payload)
                 else:
                     self.send_error(404)
                     return
@@ -388,7 +397,9 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
             except (ValueError, TypeError, KeyError) as error:
                 status, result = 400, {'error': str(error)}
             except Exception:
-                status, result = 503, {'error': 'Review launch unavailable. Check GitHub authentication and the panel configuration, then preview again.'}
+                status, result = 503, {'error': ('Stack operation unavailable. Refresh saved stack status before retrying.'
+                                                if self.path.startswith('/api/stacks/') else
+                                                'Review launch unavailable. Check GitHub authentication and the panel configuration, then preview again.')}
             body = redact(json.dumps(result)).encode()
             self.send_response(status)
             self.send_header('Content-Type', 'application/json')
@@ -422,6 +433,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                                    'processes': launcher.status()}).encode()
             elif url.path == '/api/merge-priority':
                 body = redact(json.dumps(priority.status(), ensure_ascii=False)).encode()
+            elif url.path == '/api/stacks':
+                body = redact(json.dumps(stacks.status(), ensure_ascii=False)).encode()
             elif url.path == '/api/allowances':
                 try:
                     body = json.dumps(allowances.status(refresh=True), allow_nan=False).encode()
@@ -465,6 +478,7 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
     else:
         server = ThreadingHTTPServer((host, port), Handler)
     server.automation = automation
+    server.stacks = stacks
     return server
 
 

@@ -21,7 +21,8 @@ class StackService:
     def __init__(self, path, config, github, *, collect=None, engine=None):
         self.config, self.github = dict(config), github
         self.store = StackStore(path)
-        self.collect = collect or (lambda: collect_priority(github, full=True))
+        comparisons = {}
+        self.collect = collect or (lambda: collect_priority(github, comparisons, full=True))
         settings = self.config.get('stacking', {})
         self.validation = {'commands': settings.get('commands', []),
                            'image': self.config.get('image', 'headroom-agentops-worker:local'),
@@ -76,6 +77,8 @@ class StackService:
             if record['state'] in ('prepared', 'published', 'publication_unknown'):
                 if plan['blockers']:
                     record = self.store.update(record['id'], {'state': 'stale', 'blockers': plan['blockers']})
+                elif record['state'] == 'prepared':
+                    record = self.store.update(record['id'], {'verified_at': time.time()})
                 return self.public(record)
             record = self.store.update(record['id'], {**plan, 'initiator': 'local dashboard user',
                                                        'verified_at': time.time(), 'error': None})
@@ -214,8 +217,9 @@ class StackService:
                                     state='checking', exclusive=True):
                 raise ValueError('Stack operation is active or preparation is incomplete')
             try:
-                if record.get('pr_number'):
-                    pr = self.github.request('GET', f'repos/{self.github.repo}/pulls/{record["pr_number"]}')
+                existing = self._existing_pr(record) if previous == 'publication_unknown' else None
+                if record.get('pr_number') or existing:
+                    pr = existing or self.github.request('GET', f'repos/{self.github.repo}/pulls/{record["pr_number"]}')
                     with ThreadPoolExecutor(max_workers=4) as pool:
                         sources = list(pool.map(lambda p: self.github.request('GET', f'repos/{self.github.repo}/pulls/{p["number"]}'),
                                                 record['members']))
@@ -225,6 +229,6 @@ class StackService:
                     result = {'state': 'prepared', 'verified_at': self._fresh(record)}
                 return self.public(self.store.update(record['id'], {**result, 'error': None}, owner=self.owner))
             except Exception as error:
-                self.store.update(record['id'], {'state': previous if previous == 'published' else 'stale',
+                self.store.update(record['id'], {'state': previous if previous in ('published', 'publication_unknown') else 'stale',
                                                 'verified_at': 0, 'error': redact(str(error))}, owner=self.owner)
                 raise
