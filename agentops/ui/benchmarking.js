@@ -9,6 +9,85 @@
   const transport = () => `<label>Transport<select name="transport" aria-label="Transport"><option value="local">Local</option><option value="docker">Docker</option><option value="ssh">SSH</option></select></label><div data-transport="docker" hidden>${field('image','Docker image')}</div><div data-transport="ssh" hidden>${field('host','SSH host')}${field('ssh_port','SSH port',{type:'number',value:22,min:1})}${field('ssh_config','SSH config path (optional)')}</div>`;
   const form = (action, title, content, button, hint = '') => `<form data-action="${action}" class="benchmark-form"><h3>${title}</h3>${hint ? `<p class="muted">${hint}</p>` : ''}<div class="benchmark-fields">${content}</div><button type="submit">${button}</button><p class="benchmark-message" role="status"></p></form>`;
   root.innerHTML = `<div class="benchmark-heading"><div><h2 id="benchmark-title">Benchmarking</h2><p class="muted">Compare a candidate with its baseline using paired tasks and a saved experiment.</p></div><button type="button" id="benchmark-refresh">Refresh jobs</button></div><p id="benchmark-status" role="status">Open Benchmarking to load saved jobs.</p><div class="benchmark-workflow">${form('inspect','1. Inspect candidate',field('artifact','Candidate artifact path',{required:true})+field('config','Config path (optional)')+transport(),'Inspect candidate')}${form('create','2. Create experiment',`<label>Completed inspection<select aria-label="Completed inspection" name="inspection_id" data-job-options="inspect"><option value="">Use inspection path below</option></select></label>`+field('inspection_path','Inspection path (if no saved inspection)')+field('candidate_sha','Candidate Git SHA',{required:true})+field('model','Model',{required:true})+field('tasks','Taskset path',{required:true})+field('policy','Policy path',{required:true})+field('experiment_id','Experiment label',{required:true})+field('seed','Seed',{type:'number',value:42})+field('repeats','Repeats',{type:'number',value:5,min:1}),'Create experiment')}${form('run','3. Run experiment',`<label>Saved experiment<select aria-label="Saved experiment" name="experiment_id" data-job-options="create"><option value="">Use manifest path below</option></select></label>`+field('manifest','Manifest path (if no saved experiment)')+field('artifact','Candidate artifact path',{required:true})+field('config','Config path (optional)')+transport(),'Run experiment','Running may send requests to the model provider configured for this experiment and incur usage charges. Results distinguish simulator runs from measured provider runs.')}</div><details class="benchmark-datasets"><summary>Dataset import and export</summary><div class="benchmark-dataset-forms">${form('export','Export taskset',field('tasks','Taskset path',{required:true})+'<label>Format<select name="format"><option value="inspect">Inspect</option><option value="aiperf">AIPerf</option></select></label>','Export dataset')}${form('import','Import dataset',field('dataset','Dataset path',{required:true})+field('taskset_id','Taskset ID',{required:true})+field('revision','Revision',{required:true}),'Import dataset')}</div></details><section aria-labelledby="benchmark-jobs-title"><h3 id="benchmark-jobs-title">Jobs and results</h3><div id="benchmark-jobs"></div></section>`;
+
+  // Guidance stays local to this browser and never submits benchmark work.
+  const helpCopy = {
+    transport: 'Local runs on this machine; Docker uses a container; SSH uses a remote machine. Choose a runner with access to your files and provider configuration.',
+    artifact: 'Choose the candidate Python wheel (.whl) to compare with the baseline. Browse files on the machine running AgentOps.',
+    config: 'Optional configuration file for the candidate and model provider. Paths are on the AgentOps host.',
+    inspection_path: 'Use the inspection.json produced by Inspect candidate, or choose a completed inspection above.',
+    candidate_sha: 'Full Git commit SHA of the candidate build, so results can be traced to the exact source.',
+    model: 'Provider model identifier available to your benchmark configuration. Provider credentials must already be configured on the runner.',
+    tasks: 'Taskset JSON containing the requests to replay for both baseline and candidate. Use the same tasks for a fair comparison.',
+    policy: 'Policy JSON defining the checks and thresholds used to decide whether the candidate passes.',
+    experiment_id: 'A descriptive label for this comparison; saved experiments can be selected in Run experiment.',
+    seed: 'Randomizes the order of task pairs and baseline/candidate execution. Keep this value fixed when comparing runs.',
+    repeats: 'Number of repetitions per comparison. More repetitions improve confidence and take longer.',
+    manifest: 'Use manifest.json from Create experiment, or select a saved experiment above.',
+    image: 'Docker image available to the runner, with the benchmark dependencies installed.',
+    host: 'SSH destination for the benchmark runner (for example user@host). The runner needs access to the benchmark files and credentials.',
+    ssh_port: 'SSH port on the remote runner; normally 22.',
+    ssh_config: 'Optional SSH configuration file for host aliases, keys and connection settings.',
+    dataset: 'Dataset file to convert into a taskset. Import and export prepare data; they do not run a comparison.',
+    taskset_id: 'Stable name for the imported taskset.',
+    revision: 'Dataset revision to record for reproducibility.'
+  };
+  const controls = document.createElement('div');
+  controls.className = 'benchmark-help-controls';
+  controls.innerHTML = `<button type="button" data-guide-open aria-label="Benchmark help and guided tutorial"><span aria-hidden="true">?</span> Guided setup</button><label><input type="checkbox" data-help-toggle> Show help</label>`;
+  root.querySelector('.benchmark-heading').append(controls);
+  let helpEnabled = true;
+  try { helpEnabled = localStorage.getItem('agentops.benchmark.help') !== 'off'; } catch {}
+  const helpToggle = controls.querySelector('[data-help-toggle]');
+  helpToggle.checked = helpEnabled;
+  root.querySelectorAll('input[name], select[name="transport"]').forEach((input, index) => {
+    if (!helpCopy[input.name]) return;
+    const hint = document.createElement('small');
+    hint.id = `benchmark-help-${index}`;
+    hint.className = 'benchmark-field-help';
+    hint.textContent = helpCopy[input.name];
+    hint.hidden = !helpEnabled;
+    input.setAttribute('aria-describedby', hint.id);
+    (input.closest('.benchmark-field') || input.parentElement).append(hint);
+  });
+  helpToggle.addEventListener('change', () => {
+    root.querySelectorAll('.benchmark-field-help').forEach(hint => { hint.hidden = !helpToggle.checked; });
+    try { localStorage.setItem('agentops.benchmark.help', helpToggle.checked ? 'on' : 'off'); } catch {}
+  });
+  const steps = [
+    ['Prepare your comparison', 'Compare a candidate build with a baseline using the same requests. Have a candidate wheel (.whl), taskset JSON and policy JSON ready. Files must be accessible to the selected runner. Start with Local if the dependencies and provider credentials are configured on this machine.', 'inspect'],
+    ['Inspect the candidate', 'Choose the candidate wheel and transport, then select Inspect candidate. Wait for its job to complete. Inspection produces the candidate details needed to create an experiment; it does not run the comparison.', 'inspect'],
+    ['Create a repeatable experiment', 'Select the completed inspection. Enter the candidate build’s full Git SHA and model identifier, then choose your taskset and policy files. Keep the seed fixed for repeatability. Create experiment saves a manifest describing the comparison.', 'create'],
+    ['Run the comparison', 'Select the saved experiment and the same candidate wheel. Choose where to run it, then select Run experiment. This can send requests to the configured model provider and incur usage charges. Jobs below show progress; you can cancel active work.', 'run'],
+    ['Read the results', 'After the run completes, read its decision and metrics in Benchmark jobs. A completed job alone does not mean the candidate passed: check the decision and any errors. Simulator results are labeled and do not establish measured provider performance. Copy saved artifact paths to examine the evidence or reuse the experiment.', null]
+  ];
+  const guide = document.createElement('dialog');
+  guide.className = 'benchmark-guide';
+  guide.setAttribute('aria-labelledby', 'benchmark-guide-title');
+  guide.innerHTML = `<div class="benchmark-heading"><h3 id="benchmark-guide-title">Benchmark guide</h3><button type="button" data-guide-close aria-label="Close benchmark guide">Close</button></div><p data-guide-progress class="muted"></p><div aria-live="polite"><h4 data-guide-heading></h4><p data-guide-copy></p></div><div class="benchmark-guide-actions"><button type="button" data-guide-back>Back</button><button type="button" data-guide-go>Go to this step</button><button type="button" data-guide-next>Next</button></div>`;
+  document.body.append(guide);
+  let guideStep = 0;
+  function renderGuide() {
+    guide.querySelector('[data-guide-progress]').textContent = `Step ${guideStep + 1} of ${steps.length}`;
+    guide.querySelector('[data-guide-heading]').textContent = steps[guideStep][0];
+    guide.querySelector('[data-guide-copy]').textContent = steps[guideStep][1];
+    guide.querySelector('[data-guide-back]').disabled = guideStep === 0;
+    guide.querySelector('[data-guide-next]').textContent = guideStep === steps.length - 1 ? 'Finish' : 'Next';
+  }
+  controls.querySelector('[data-guide-open]').addEventListener('click', () => { guideStep = 0; renderGuide(); guide.showModal(); });
+  guide.querySelector('[data-guide-close]').addEventListener('click', () => guide.close());
+  guide.querySelector('[data-guide-back]').addEventListener('click', () => { if (guideStep > 0) guideStep--; renderGuide(); });
+  guide.querySelector('[data-guide-next]').addEventListener('click', () => { if (guideStep === steps.length - 1) guide.close(); else { guideStep++; renderGuide(); } });
+  guide.querySelector('[data-guide-go]').addEventListener('click', () => {
+    const action = steps[guideStep][2];
+    guide.close();
+    const target = action ? root.querySelector(`form[data-action="${action}"]`) : root.querySelector('#benchmark-jobs');
+    target.scrollIntoView({block: 'center'});
+    const focusTarget = target.querySelector('input, select, button') || target;
+    if (focusTarget === target) target.setAttribute('tabindex', '-1');
+    focusTarget.focus({preventScroll: true});
+  });
+
   const status = root.querySelector('#benchmark-status');
   const picker = document.createElement('dialog');
   picker.className = 'benchmark-picker';
@@ -20,7 +99,7 @@
   async function browse(path = '') {
     if (pickerBusy) return;
     pickerBusy = true;
-    pickerStatus.textContent = 'Loading folder…';
+    pickerStatus.textContent = 'Loading folder...';
     picker.querySelector('.benchmark-picker-entries').replaceChildren();
     try {
       const auth = await fetch('/api/launcher');
@@ -123,7 +202,7 @@
     if (payload.action === 'create' && !payload.inspection_id && !payload.inspection_path || payload.action === 'run' && !payload.experiment_id && !payload.manifest) {
       message.textContent = payload.action === 'create' ? 'Choose a completed inspection or enter its path.' : 'Choose a saved experiment or enter its manifest path.'; return;
     }
-    button.disabled = true; message.textContent = 'Submitting…';
+    button.disabled = true; message.textContent = 'Submitting...';
     try { await request('/api/benchmarks',payload); message.textContent = 'Job submitted. Follow its progress below.'; await refresh(); }
     catch (error) { message.textContent = error.message; }
     finally { button.disabled = false; }

@@ -144,3 +144,41 @@ test('every file path uses the authenticated filesystem picker with folder navig
   expect(requests.every(request => request.token === 'benchmark-test-token' && request.kind === 'wheel')).toBe(true);
   expect(requests.map(request => request.path)).toContain('/fixture/folder');
 });
+
+
+test('help persists and tutorial navigates without launching jobs', async ({page}) => {
+  const state = await fixture(page);
+  const help = page.getByRole('checkbox', {name:'Show help'});
+  await expect(help).toBeChecked();
+  await page.screenshot({path:'../../.agentops/benchmark-help-desktop.png',fullPage:true});
+  await expect(page.locator('.benchmark-field-help').first()).toBeVisible();
+  await help.uncheck();
+  await expect(page.locator('.benchmark-field-help').first()).toBeHidden();
+  await page.reload();
+  await page.getByRole('button', {name:'Benchmarking',exact:true}).click();
+  await expect(help).not.toBeChecked();
+  const open = page.getByRole('button', {name:'Benchmark help and guided tutorial'});
+  await open.click();
+  const guide = page.getByRole('dialog', {name:'Benchmark guide',exact:true});
+  await expect(guide).toBeVisible();
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:'../../.agentops/benchmark-help-mobile.png'});
+  await expect(guide.getByRole('button', {name:'Back',exact:true})).toBeDisabled();
+  await expect(guide).toContainText('Step 1 of 5');
+  await guide.getByRole('button', {name:'Next',exact:true}).click();
+  await guide.getByRole('button', {name:'Next',exact:true}).click();
+  await expect(guide).toContainText('Create a repeatable experiment');
+  await guide.getByRole('button', {name:'Go to this step',exact:true}).click();
+  await expect(page.locator('form[data-action="create"] select').first()).toBeFocused();
+  await open.click();
+  await page.keyboard.press('Escape');
+  await expect(guide).not.toBeVisible();
+  await expect(open).toBeFocused();
+  await open.click();
+  for (let i=0;i<4;i++) await guide.getByRole('button', {name:'Next',exact:true}).click();
+  await expect(guide).toContainText('Simulator results');
+  await guide.getByRole('button', {name:'Finish',exact:true}).click();
+  expect(state.posts).toHaveLength(0);
+  await help.check();
+  await expect(page.locator('.benchmark-field-help').first()).toBeVisible();
+});
