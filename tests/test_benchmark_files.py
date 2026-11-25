@@ -8,7 +8,7 @@ from agentops.benchmark_files import FileBrowser, list_files
 class BenchmarkFilePickerTests(unittest.TestCase):
     def test_filters_files_but_preserves_directory_navigation(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             browser = FileBrowser([root])
             (root / "folder").mkdir()
             (root / "candidate.WHL").write_bytes(b"wheel")
@@ -50,7 +50,7 @@ class BenchmarkFilePickerTests(unittest.TestCase):
 
     def test_only_server_issued_locations_can_be_opened(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             folder = root / "nested"
             folder.mkdir()
             browser = FileBrowser([root])
