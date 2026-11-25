@@ -36,8 +36,10 @@ test('default view gives linked merge order with visibly nested stacks', async (
   await expect(rows.nth(2)).toContainText('After prerequisites');
   await expect(rows.nth(2).getByRole('link', {name: '#101', exact: true})).toHaveAttribute('href', 'https://github.com/example/repository/pull/101');
   await expect(rows.nth(0).getByRole('link', {name: /fix: repair cache/})).toHaveAttribute('href', 'https://github.com/example/repository/pull/101');
-  const parent = await rows.nth(0).boundingBox(), child = await rows.nth(2).boundingBox();
-  expect(child.x).toBeGreaterThan(parent.x);
+  // Read both positions in one browser task so periodic refresh cannot detach
+  // one row between two boundingBox calls.
+  await expect.poll(() => rows.evaluateAll(items => items.length >= 3 &&
+    items[2].getBoundingClientRect().x > items[0].getBoundingClientRect().x)).toBe(true);
   await expect(page.locator('#priority-stacks li li')).toContainText('#102');
   await expect(rows.nth(3)).toContainText('CI pending');
   await page.getByRole('button', {name: 'Reviews', exact: true}).click();

@@ -13,7 +13,10 @@
   };
   const tag = (text, kind = '') => `<span class="badge ${kind}">${escape(text)}</span>`;
   let snapshot = null, busy = false, lastRender = '', view = 'priority';
-  try { if (localStorage.getItem('agentops-view') === 'reviews') view = 'reviews'; } catch {}
+  try {
+    const saved = localStorage.getItem('agentops-view');
+    if (['reviews', 'benchmarks'].includes(saved)) view = saved;
+  } catch {}
 
   function render() {
     if (!snapshot) return;
@@ -92,21 +95,28 @@
   }
 
   function selectView(next) {
-    view = next;
+    view = ['priority', 'reviews', 'benchmarks'].includes(next) ? next : 'priority';
     const priority = view === 'priority';
+    const reviews = view === 'reviews';
     byId('priority-view').hidden = !priority;
-    byId('reviews-workspace').hidden = priority;
-    byId('metrics').hidden = priority;
-    document.querySelector('.statusline').hidden = priority;
-    byId('run').hidden = priority;
+    byId('reviews-workspace').hidden = !reviews;
+    byId('benchmark-view').hidden = view !== 'benchmarks';
+    byId('metrics').hidden = !reviews;
+    document.querySelector('.statusline').hidden = !reviews;
+    byId('run').hidden = !reviews;
+    byId('newreview').hidden = view === 'benchmarks';
     byId('view-priority').setAttribute('aria-pressed', String(priority));
-    byId('view-reviews').setAttribute('aria-pressed', String(!priority));
-    document.title = `Headroom AgentOps · ${priority ? 'Merge priority' : 'Reviews'}`;
+    byId('view-reviews').setAttribute('aria-pressed', String(reviews));
+    byId('view-benchmarks').setAttribute('aria-pressed', String(view === 'benchmarks'));
+    document.title = `Headroom AgentOps · ${{priority: 'Merge priority', reviews: 'Reviews', benchmarks: 'Benchmarking'}[view]}`;
     try { localStorage.setItem('agentops-view', view); } catch {}
+    document.dispatchEvent(new CustomEvent('agentops-view', {detail: {view}}));
     if (priority) refreshPriority();
   }
+  window.agentopsSelectView = selectView;
   byId('view-priority').onclick = () => selectView('priority');
   byId('view-reviews').onclick = () => selectView('reviews');
+  byId('view-benchmarks').onclick = () => selectView('benchmarks');
   byId('refresh').addEventListener('click', refreshPriority);
   byId('auto').addEventListener('click', () => { lastRender = ''; render(); });
   document.addEventListener('visibilitychange', () => {

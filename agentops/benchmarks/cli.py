@@ -247,7 +247,7 @@ def main(argv=None):
 
     # A graceful container/SSH stop follows the same evidence-preserving path
     # as Ctrl-C. SIGKILL/power loss cannot be caught.
-    for name in ("SIGTERM", "SIGHUP"):
+    for name in ("SIGTERM", "SIGHUP", "SIGBREAK"):
         if hasattr(signal, name):
             signum = getattr(signal, name)
             previous[signum] = signal.signal(signum, cancel)

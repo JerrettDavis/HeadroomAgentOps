@@ -17,6 +17,38 @@ candidate manifest. Verify the candidate manifest's provenance before using it.
 The worker verifies wheel bytes before installation; it does not establish the
 source-to-wheel relationship independently of the candidate manifest.
 
+## Dashboard
+
+Open the local dashboard and select **Benchmarking**. Viewing this tab only
+reads saved status; it does not start provider requests or PR reviews.
+Use Browse controls to select local files on the machine running AgentOps.
+Pickers filter wheels, JSON configurations and JSON/JSONL datasets and provide
+folder, local-drive and home navigation. They read directory entries, not file
+contents. Network locations and filesystem links are not available in the picker.
+
+1. Inspect a candidate wheel, choosing its runner configuration and local,
+   Docker or SSH transport. For Docker, select environment variable names to
+   forward credentials; never enter credential values in the dashboard.
+   Inspection installs and starts the candidate.
+2. Create an experiment from that inspection, pinned source/model identities,
+   taskset and policy, seed and repeats.
+3. Run the experiment using the same candidate and matching transport.
+   Provider calls begin only after submitting the operation.
+
+The dashboard retains jobs and evidence below the configured state directory's
+`benchmarks` folder. A worker supervisor records completion independently of the
+panel, so closing the browser or restarting the panel does not restart a run.
+Saved status and result paths remain available when you return. Cancellation
+and collection preserve the original run/transport receipts. Concurrent launches
+are serialized independently of review workers.
+
+Results show native pass, fail or inconclusive decisions and paired confidence
+intervals when available. Simulator evidence remains explicitly inconclusive.
+Inspect/AIPerf dataset exchange is available alongside the native workflow;
+external scores do not become release evidence. Inputs, candidate-install logs
+and dataset exports remain private. The bundled smoke taskset checks protocol
+behavior and does not establish release quality.
+
 ## Local execution
 
 Set the provider credentials in the worker's environment, then inspect the
