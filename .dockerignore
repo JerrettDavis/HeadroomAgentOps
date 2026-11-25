@@ -1,6 +1,12 @@
 *
 !agentops/
 !agentops/*.py
+!agentops/benchmarks/
+!agentops/benchmarks/*.py
+!agentops/benchmarks/contracts/
+!agentops/benchmarks/contracts/*.json
+!agentops/benchmarks/contracts/LICENSE
+!agentops/benchmarks/contracts/SOURCE.md
 !worker/
 !worker/Dockerfile
 !worker/entry.py

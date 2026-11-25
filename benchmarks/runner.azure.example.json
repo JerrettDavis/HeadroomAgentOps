@@ -1,0 +1,9 @@
+{
+  "protocol": "azure",
+  "api_key_env": "AZURE_OPENAI_API_KEY",
+  "extras": ["proxy"],
+  "install_timeout": 1200,
+  "startup_timeout": 120,
+  "request_timeout": 180,
+  "proxy_args": []
+}

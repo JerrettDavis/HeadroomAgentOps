@@ -1,0 +1,3 @@
+# Isolated OSS compatibility lane; not runtime dependencies.
+inspect-ai==0.3.292
+aiperf==0.14.0

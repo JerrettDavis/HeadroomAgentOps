@@ -1,0 +1,138 @@
+name: Release benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: Committed experiment JSON path with approved policy and observed identities
+        required: true
+      candidate_url:
+        description: HTTPS URL of the immutable candidate wheel (digest is pinned in manifest)
+        required: true
+      worker_image:
+        description: Published benchmark worker image pinned with @sha256
+        required: true
+      runner_config:
+        description: Committed runner configuration JSON path
+        default: benchmarks/runner.openai.example.json
+        required: true
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    environment: release-benchmarks
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Download and verify immutable candidate
+        env:
+          CANDIDATE_URL: ${{ inputs.candidate_url }}
+          EXPERIMENT: ${{ inputs.manifest }}
+          WORKER_IMAGE: ${{ inputs.worker_image }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, urllib.parse, urllib.request, subprocess
+          from agentops.benchmarks.cli import load_json
+          from agentops.benchmarks.core import validate_manifest
+          from agentops.benchmarks.local import verify_artifact
+          root = pathlib.Path.cwd()
+          source = (root / os.environ['EXPERIMENT']).resolve()
+          assert source.is_relative_to(root)
+          experiment = load_json(source)
+          validate_manifest(experiment)
+          url = urllib.parse.urlsplit(os.environ['CANDIDATE_URL'])
+          assert url.scheme == 'https' and url.hostname and not url.username and not url.password
+          name = pathlib.PurePosixPath(url.path).name
+          assert re.fullmatch(r'[A-Za-z0-9_.+-]+[.]whl', name)
+          target = root / '.benchmark-candidate' / name
+          target.parent.mkdir()
+          with urllib.request.urlopen(os.environ['CANDIDATE_URL'], timeout=120) as response, target.open('wb') as output:
+              while chunk := response.read(1024 * 1024):
+                  output.write(chunk)
+                  assert output.tell() <= 1024**3
+          verify_artifact(target, experiment['candidate']['artifact_sha256'])
+          image = os.environ['WORKER_IMAGE']
+          assert re.fullmatch(r'[A-Za-z0-9._:/-]+@sha256:[a-f0-9]{64}', image)
+          subprocess.run(['docker', 'pull', image], check=True)
+          PY
+      - name: Run paired experiment
+        id: run
+        env:
+          EXPERIMENT: ${{ inputs.manifest }}
+          RUNNER_CONFIG: ${{ inputs.runner_config }}
+          WORKER_IMAGE: ${{ inputs.worker_image }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          OPENAI_TARGET_API_URL: ${{ vars.OPENAI_TARGET_API_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, subprocess, sys
+          wheel = next(pathlib.Path('.benchmark-candidate').glob('*.whl'))
+          names = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'AZURE_OPENAI_API_KEY', 'OPENAI_TARGET_API_URL',
+                   'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION']
+          command = [sys.executable, '-m', 'agentops.benchmarks.cli', 'run', os.environ['EXPERIMENT'],
+                     '--artifact', str(wheel), '--config', os.environ['RUNNER_CONFIG'], '--output', 'benchmark-results',
+                     '--transport', 'docker', '--image', os.environ['WORKER_IMAGE'], '--cpus', '2', '--memory-gib', '4']
+          for name in names:
+              if os.environ.get(name):
+                  command += ['--env', name]
+          code = subprocess.run(command).returncode
+          assert code in (0, 1, 2), f'worker transport failed ({code})'
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: raw
+        if: always()
+        with:
+          name: benchmark-raw-${{ github.run_id }}-${{ github.run_attempt }}
+          path: benchmark-results/*.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Export release reference
+        if: always() && steps.raw.outcome == 'success'
+        env:
+          EXPERIMENT: ${{ inputs.manifest }}
+          RESULT_URI: ${{ steps.raw.outputs.artifact-url }}
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          from agentops.benchmarks.cli import main, load_json
+          summary = load_json('benchmark-results/summary.json')
+          code = main(['reference', os.environ['EXPERIMENT'], '--result',
+                       str(pathlib.Path('benchmark-results') / summary['result_file']),
+                       '--uri', os.environ['RESULT_URI'], '--output', 'benchmark-reference.json'])
+          assert code == 0
+          PY
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        if: always() && steps.raw.outcome == 'success'
+        with:
+          subject-path: |
+            benchmark-results/*.json
+            benchmark-reference.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always() && steps.raw.outcome == 'success'
+        with:
+          name: benchmark-reference-${{ github.run_id }}-${{ github.run_attempt }}
+          path: benchmark-reference.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Enforce qualification decision
+        if: always()
+        run: |
+          python - <<'PY'
+          from agentops.benchmarks.cli import load_json
+          assert load_json('benchmark-results/summary.json')['status'] == 'pass', 'benchmark did not pass'
+          PY
