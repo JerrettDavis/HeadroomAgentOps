@@ -1,0 +1,8 @@
+{
+  "protocol": "bedrock",
+  "extras": ["proxy", "bedrock"],
+  "install_timeout": 1200,
+  "startup_timeout": 120,
+  "request_timeout": 180,
+  "proxy_args": ["--backend", "bedrock"]
+}

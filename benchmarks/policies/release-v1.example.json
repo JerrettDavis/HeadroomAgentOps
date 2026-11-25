@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "method": "paired_t_95",
+  "minimum_pairs": 30,
+  "minimum_savings": 0.1,
+  "maximum_accuracy_regression": 0.0,
+  "minimum_accuracy": 0.9,
+  "missing_data_status": "inconclusive",
+  "maximum_latency_ratio": 1.2
+}

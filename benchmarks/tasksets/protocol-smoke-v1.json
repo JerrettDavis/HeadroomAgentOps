@@ -1,0 +1,19 @@
+{
+  "taskset_id": "protocol-smoke-v1",
+  "revision": "1.0.0",
+  "tasks": [
+    {
+      "id": "arithmetic",
+      "messages": [{"role": "user", "content": "What is 19 + 23? Reply with only the integer."}],
+      "expected": "42",
+      "max_tokens": 32
+    },
+    {
+      "id": "streamed-fact",
+      "messages": [{"role": "user", "content": "The release code is ORCHID-17. Repeat only the release code."}],
+      "expected": "ORCHID-17",
+      "stream": true,
+      "max_tokens": 64
+    }
+  ]
+}

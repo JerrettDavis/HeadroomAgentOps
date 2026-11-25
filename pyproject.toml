@@ -10,11 +10,15 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = ["PyYAML==6.0.3"]
 
+[project.optional-dependencies]
+benchmark-test = ["pytest==9.0.2", "jsonschema==4.26.0"]
+
 [project.scripts]
 headroom-review = "agentops.cli:main"
+headroom-benchmark = "agentops.benchmarks.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["agentops*"]
 
 [tool.setuptools.package-data]
-agentops = ["panel.html", "tray.ps1", "brand/*.svg", "brand/*.ico", "brand/*.png", "ui/*.js", "ui/*.txt", "ui/*.md"]
+agentops = ["panel.html", "tray.ps1", "brand/*.svg", "brand/*.ico", "brand/*.png", "ui/*.js", "ui/*.txt", "ui/*.md", "benchmarks/contracts/*.json", "benchmarks/contracts/LICENSE", "benchmarks/contracts/SOURCE.md"]

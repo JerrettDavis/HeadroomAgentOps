@@ -285,6 +285,14 @@ Terminal job checkouts and staged authentication are removed only after verifyin
 
 Candidate bundles are also retained as content-addressed evidence before cleanup, allowing later guarded publication without the original container. Resuming a run first reconciles terminal CI and queues bounded follow-ups for new discussion, shared evidence or terminal failures. Pending progress alone does not start another agent. Baseline exception import and publication of protected workflow changes remain unavailable; these cases stay held.
 
+## Benchmarks
+
+Use `headroom-benchmark` for deterministic paired A1/B release experiments with
+verified candidate artifacts, policy decisions, and hashed evidence. It runs
+locally, in Docker, or over SSH on droplets, Azure VMs, AWS hosts and other Linux
+runners. OpenAI, Azure, Anthropic and Bedrock provider protocols share the same
+experiment format. See [benchmark setup and execution](docs/benchmarks.md).
+
 ## Verification
 
 On Windows, running the panel also adds a notification-area icon. Double-click

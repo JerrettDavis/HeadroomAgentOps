@@ -23,8 +23,24 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install .
+      - run: python -m pip install '.[benchmark-test]'
       - run: python -m unittest discover -s tests -v
+      - run: python -m pytest tests -q -k benchmark
+  benchmark-transports:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install '.[benchmark-test]'
+      - run: docker build -f benchmarks/Dockerfile -t headroom-benchmark:validation .
+      - run: docker build -f tests/fixtures/benchmark-ssh.Dockerfile -t headroom-benchmark-ssh:validation .
+      - run: python -m pytest tests/test_benchmark_docker.py tests/test_benchmark_ssh.py -q
+        env:
+          HEADROOM_BENCH_DOCKER_IMAGE: headroom-benchmark:validation
+          HEADROOM_BENCH_SSH_IMAGE: headroom-benchmark-ssh:validation
   ui:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -61,7 +77,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           for name in ('worker/node_modules/fixture/package.json', 'worker/local-auth-fixture.json',
-                       'scripts/internal-fixture.py', 'docs/internal-fixture.md'):
+                       'scripts/internal-fixture.py', 'docs/internal-fixture.md', 'benchmarks/internal-fixture.json'):
               path = Path(name)
               path.parent.mkdir(parents=True, exist_ok=True)
               path.write_text('synthetic fixture: must not ship')
@@ -82,7 +98,7 @@ jobs:
           assert not any(name.startswith(('.agentops/', '.remember/', '.serena/', 'docs/superpowers/')) for name in names)
           assert 'agentops.toml' not in names and 'docs/validation.md' not in names
           assert not any('/node_modules/' in name for name in names)
-          assert not names.intersection({'worker/local-auth-fixture.json', 'scripts/internal-fixture.py', 'docs/internal-fixture.md'})
+          assert not names.intersection({'worker/local-auth-fixture.json', 'scripts/internal-fixture.py', 'docs/internal-fixture.md', 'benchmarks/internal-fixture.json'})
           PY
       - run: python -m pip install dist/*.whl
       - run: headroom-review --help
