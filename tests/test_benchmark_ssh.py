@@ -82,6 +82,26 @@ def test_ssh_staging_execution_and_collection_use_same_run(tmp_path, monkeypatch
             "--ssh-config",
             str(ssh_config),
         ]
+        # Container creation/host-key availability do not prove sshd accepts
+        # authenticated sessions yet, especially on fast Linux CI hosts.
+        connection = SimpleNamespace(
+            host="root@127.0.0.1", ssh_port=int(port), ssh_config=str(ssh_config)
+        )
+        deadline = time.monotonic() + 30
+        while True:
+            ready = subprocess.run(
+                ssh_command(
+                    connection,
+                    ["python3", "-c", "import sys; print(sys.version_info[:2])"],
+                ),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if ready.returncode == 0:
+                break
+            assert time.monotonic() < deadline, ready.stderr
+            time.sleep(0.2)
         inspection_dir = tmp_path / "inspection"
         assert (
             main(
