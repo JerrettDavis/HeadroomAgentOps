@@ -48,6 +48,23 @@ def test_ssh_staging_execution_and_collection_use_same_run(tmp_path, monkeypatch
             ],
             check=True,
         )
+        # docker cp retains source mode bits; hosted Linux runners may create
+        # group-writable public keys, which sshd correctly rejects.
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                container,
+                "chown",
+                "root:root",
+                "/root/.ssh/authorized_keys",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["docker", "exec", container, "chmod", "600", "/root/.ssh/authorized_keys"],
+            check=True,
+        )
         port = (
             subprocess.check_output(["docker", "port", container, "22/tcp"], text=True)
             .strip()
