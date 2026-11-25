@@ -23,7 +23,8 @@ Open the local dashboard and select **Benchmarking**. Viewing this tab only
 reads saved status; it does not start provider requests or PR reviews.
 Use Browse controls to select local files on the machine running AgentOps.
 Pickers filter wheels, JSON configurations and JSON/JSONL datasets and provide
-folder, drive and home navigation. They read directory entries, not file contents.
+folder, local-drive and home navigation. They read directory entries, not file
+contents. Network locations and filesystem links are not available in the picker.
 
 1. Inspect a candidate wheel, choosing its runner configuration and local,
    Docker or SSH transport. For Docker, select environment variable names to
