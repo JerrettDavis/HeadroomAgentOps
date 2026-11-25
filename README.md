@@ -72,6 +72,12 @@ PRs with merge conflicts or failed CI are excluded from both the list and stack
 outline; they still block their dependants. Pending or unknown CI remains visible
 as needing attention.
 
+**PR auto-stacker** prepares selected eligible PRs together with automatic
+prerequisite inclusion and cumulative Git conflict checks. Preparation makes no
+model calls. Publish the combined draft PR with a separate click, then review its
+CI and merge on GitHub. See [PR auto-stacker](docs/pr-auto-stacker.md) for optional
+isolated validation, freshness checks and recovery.
+
 Maintainer status uses GitHub's owner/member/collaborator author association.
 Dependency and fix/feature categories use labels or conventional commit titles.
 Main-CI repairs need a `fixes-main-ci`, `fix-main-ci` or `main-ci-fix` label, or an
@@ -148,7 +154,7 @@ Copy-Item agentops.example.toml agentops.toml
 
 Use your existing `gh` login for the coordinator. Workers receive no GitHub publisher credential, Docker socket, user home, primary checkout or shared Git configuration. Worker model authentication is copied separately; inherited harness hooks and MCP configurations are not copied.
 
-Codex uses `OPENAI_API_KEY` or `auth.json` from `auth_root` (default `CODEX_HOME`, otherwise `~/.codex`). Claude uses `ANTHROPIC_API_KEY` or `.credentials.json` from `auth_root` (default `~/.claude`). Select an explicit model in configuration when stable model selection matters. Omitted models use the installed harness default, which may change server-side.
+Codex uses `OPENAI_API_KEY` or `auth.json` from `auth_root` (default `CODEX_HOME`, otherwise `~/.codex`). Claude uses `ANTHROPIC_API_KEY` or `.credentials.json` from `auth_root` (default `~/.claude`). Devin uses the `credentials.toml` written by `devin auth login` from `auth_root` (default `%APPDATA%\devin` on Windows, `~/.local/share/devin` on Linux and macOS); only the credentials file is staged, never CLI configuration, sessions or MCP settings. Select an explicit model in configuration when stable model selection matters. Omitted models use the installed harness default, which may change server-side.
 
 Copilot can use your native local sign-in through an inference-only host relay:
 

@@ -17,9 +17,11 @@ from .cli import make_plan
 from .evidence import Evidence
 from .github import GitHub
 from .ledger import Ledger
+from .provider_usage import default_auth_root
 from .publisher import Publisher
 from .reconcile import reconcile_jobs
 from .requalification import requalify_inherited_review
+from .process import owner_state
 
 
 def parse_prs(text, repo):
@@ -58,7 +60,7 @@ class Launcher:
         for key in ('harness', 'model', 'concurrency', 'publish'):
             if key in request:
                 config[key] = request[key]
-        if config['harness'] not in ('codex', 'claude', 'copilot'):
+        if config['harness'] not in ('codex', 'claude', 'copilot', 'devin'):
             raise ValueError('Unknown review harness')
         if type(config['concurrency']) is not int or not 1 <= config['concurrency'] <= 4:
             raise ValueError('Concurrency must be an integer from 1 to 4')
@@ -70,7 +72,8 @@ class Launcher:
             # Let the existing CLI select the appropriate default credential directory.
             config['auth_root'] = (os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))
                                    if config['harness'] == 'codex' else
-                                   str(Path.home() / '.claude') if config['harness'] == 'claude' else None)
+                                   str(Path.home() / '.claude') if config['harness'] == 'claude' else
+                                   str(default_auth_root('devin')) if config['harness'] == 'devin' else None)
         return config
 
     def query_numbers(self, query):
@@ -218,9 +221,42 @@ class Launcher:
         current = {pr['number']: pr for pr in snapshot['prs']}
         excluded = {a.lower() for a in self.config.get('exclude_authors', [])}
         latest = {}
-        for job in self.ledger.jobs():
+        jobs = self.ledger.jobs()
+        for job in jobs:
             if job['repo'] == self.config['repo']:
                 latest[job['number']] = job
+        # A dead coordinator can leave completed workers occupying every global
+        # slot. Resume its saved assignments rather than clone a review plan.
+        # The coordinator verifies owner, worker state and current revisions.
+        orphan_runs = {j['run_id'] for j in jobs if j['repo'] == self.config['repo']
+                       and j['state'] == 'running'
+                       and owner_state(j['owner']) == 'missing'}
+        with self.lock:
+            for run_id in orphan_runs:
+                process = self.processes.get(run_id)
+                if process is not None and process.poll() is None:
+                    continue
+                run = self.ledger.get_run(run_id)
+                if run['stopped'] or not run['config'].get('publish'):
+                    continue
+                run_excluded = excluded | {a.lower() for a in run['config'].get('exclude_authors', [])}
+                run_jobs = self.ledger.jobs(run_id)
+                if any(current.get(j['number'], {}).get('author', '').lower() in run_excluded
+                       for j in run_jobs if j['state'] == 'running'):
+                    continue
+                for queued in (j for j in run_jobs if j['state'] == 'queued' and not j['stale']):
+                    pr = current.get(queued['number'])
+                    if (not pr or pr['head_sha'] != queued['head_sha'] or
+                            snapshot['main_sha'] != queued['main_sha'] or
+                            latest.get(queued['number'], {}).get('id') != queued['id'] or
+                            pr['author'].lower() in run_excluded or
+                            ((non_draft_only or run['config'].get('non_draft_only')) and pr.get('draft') is not False)):
+                        self.ledger.cancel_queued(queued['id'], 'Eligibility changed before orphan recovery')
+                logdir = self.root / 'launches'
+                logdir.mkdir(parents=True, exist_ok=True)
+                recovered = self._spawn({'run_id': run_id, 'selected': [], 'log': str(logdir / f'{run_id}.log')})
+                if recovered.get('error'):
+                    report['errors'].append({'run_id': run_id, 'error': recovered['error']})
         selected = []
         for number, job in latest.items():
             pr = current.get(number)
@@ -281,7 +317,12 @@ class Launcher:
                 if (run['stopped'] or not self.config.get('publish') or not run['config'].get('publish')
                         or not run['config'].get('require_decision')):
                     continue
-                jobs = [j for j in self.ledger.jobs(run_id) if j['state'] == 'queued' and not j['stale']]
+                run_jobs = self.ledger.jobs(run_id)
+                if any(j['state'] == 'running' and owner_state(j['owner']) != 'missing' for j in run_jobs):
+                    # Panel restarts lose Popen handles, not coordinator ownership.
+                    # Do not re-inventory a live run or start a competing coordinator.
+                    continue
+                jobs = [j for j in run_jobs if j['state'] == 'queued' and not j['stale']]
                 if not jobs:
                     continue
                 try:

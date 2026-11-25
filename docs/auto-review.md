@@ -4,7 +4,12 @@ Start the dashboard with `python -m agentops panel` and open **Automatic reviews
 from the header icon:
 
 - **Review new PRs automatically** schedules newly observed PRs and unreviewed required-review backlog.
-- **Review updated PRs automatically** schedules a PR when its head commit changes.
+- **Review updated PRs automatically** checks the PR contribution when its head commit changes.
+  With verified prior analysis, unchanged contributions (including main updates
+  and mechanical conflict resolutions) and dependency-only updates skip agent work.
+  Hunk line numbers may move; function anchors and surrounding context must match.
+  Python formatting is compared using complete hash-verified source tokens, preserving
+  strings, indentation and logical newlines. Missing or truncated evidence requires review.
   CI and discussion updates are rechecked against saved analysis; they do not
   automatically start an unlimited sequence of fresh reviews.
 - **Only review non-draft PRs** keeps draft PRs waiting until they become ready.
@@ -18,6 +23,22 @@ configured state directory. Restarting the dashboard preserves them. Turning bot
 triggers off pauses observation; changes detected after resuming can be reviewed.
 A pending event remains available while its trigger is disabled. Closed PRs are
 removed on the next complete inventory. Incomplete inventories never dispatch work.
+
+`review_notes` in `auto-review.json` records the current head, source review job,
+comparison reason and immutable evidence references across sessions. A skipped
+update never grants approval, test coverage or CI qualification to the new head.
+The baseline remains the last actual analysis, so multiple small updates are
+compared cumulatively. Existing unresolved findings remain in the prior evidence.
+Dependency-only handling covers modified standard lockfiles and changes confined
+to dependency fields in `package.json` and `pyproject.toml`; scripts, build settings,
+renames, removals and mixed code updates require review.
+
+Use **New Review** to explicitly re-review a PR regardless of automatic skips.
+Manual launches use `--force-fresh`; CLI runs can also pass that flag. For material
+updates, workers receive `review-delta.json` and `previous-review-notes.json` and
+reuse source-reading coverage only for verified identical Git blobs. Full prior
+evidence remains available for targeted lookups. Main interactions, unresolved
+findings and current validation still require attention.
 
 Queue discovery completes one paginated traversal without requiring the whole
 repository to remain unchanged for a second pass. Preview and launch independently
@@ -38,6 +59,32 @@ these holds. A new head or main permits a fresh required-review attempt.
 Failed workers retry with an increasing delay, starting at five minutes and
 capped at one hour for the same head/main. Successful or active work takes
 precedence over old failures. Other PRs and new revisions remain eligible.
+
+Jobs queued in stopped sessions never count as completed reviews. If such a job
+hid a head that has not been analysed, the updated-PR trigger rechecks it against
+actual prior analysis, even when that head was already inventoried. Equivalent
+diffs retain a verified skip receipt bound to head, target, repository, inventory
+update time and main; materially changed contributions are queued normally.
+An already-analysed identical head in the same source repository and target
+branch reuses source analysis without fetching full PR discussion again. This
+scheduling shortcut never reuses approval or target/main qualification.
+
+The ALL dashboard view includes historical PRs and closed PRs. Its historical
+outcome fraction is not live review coverage. Queued jobs from stopped sessions
+are labeled **Stopped before dispatch** and excluded from **Queued for dispatch**.
+Earlier persisted analysis is labeled separately and does not imply that a newer
+head was reviewed.
+
+An unpublished approval proposal against an older main is surfaced as
+`target_qualification_required`, even when GitHub still displays an earlier
+change request. It remains a hold rather than silently disappearing from work
+status. Newer completed analysis supersedes the old proposal. A main-only update
+does not automatically consume another model session or bypass qualification;
+explicit follow-ups reuse prior notes and unchanged-file coverage.
+Unpublished approval proposals against current main also remain visible with
+their saved qualification reasons. Equivalent-contribution skips are counted as
+reused analysis, separately from unresolved holds. Current analysis and successful
+publication are distinct states; neither a skip nor an old proposal grants approval.
 
 Every five minutes a single background task rechecks up to four outstanding
 current-revision reviews without blocking inventory polling. Attempt timestamps persist independently of success so malformed records

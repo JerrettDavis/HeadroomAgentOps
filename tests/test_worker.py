@@ -18,6 +18,13 @@ def result():
 
 
 class WorkerTests(unittest.TestCase):
+    def test_review_only_source_attribution_survives_worker_result_validation(self):
+        value = {**result(), 'source_review': {'manifest_hash': 'manifest', 'verdict': 'held',
+            'rationale': 'Changed code is clear; unchanged Docker sources remain execution-held.',
+            'evidence': ['Checksum regression passed.'], 'review_only_verdict': 'clear',
+            'execution_hold_scope': 'inherited_only', 'inherited_execution_paths': ['Dockerfile']}}
+        self.assertEqual(validate_result(value, value), value)
+
     def test_discard_unstarted_preparation_clears_auth_without_docker_calls(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -195,14 +202,14 @@ class WorkerTests(unittest.TestCase):
                 validate_result({**value, **change}, value)
 
     def test_every_adapter_starts_noninteractive_fresh_session(self):
-        for name in ('codex', 'claude', 'copilot'):
+        for name in ('codex', 'claude', 'copilot', 'devin'):
             first = {**result(), 'prompt': 'Review exactly this PR.'}
             second = {**first, 'session_id': str(uuid.uuid4())}
             one = Harness(name).command(first)
             two = Harness(name).command(second)
             self.assertFalse(any(a in ('resume', '--resume', '--continue') for a in one))
             self.assertTrue('exec' in one or '--print' in one or '--prompt' in one)
-            if name != 'codex':
+            if name in ('claude', 'copilot'):
                 self.assertNotEqual(one, two)
             self.assertNotIn('--fleet', one)
 
@@ -293,6 +300,37 @@ class WorkerTests(unittest.TestCase):
             (root / 'config.toml').write_text('dangerous inherited MCP configs')
             plan = auth_plan('codex', {}, root)
             self.assertEqual(plan['files'], {'auth.json': str(root / 'auth.json')})
+
+    def test_devin_auth_stages_only_the_credentials_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(ValueError):
+                auth_plan('devin', {'WINDSURF_API_KEY': 'ambient'}, root)
+            (root / 'credentials.toml').write_text('windsurf_api_key = "model-only"\n', encoding='utf8')
+            (root / 'config.json').write_text('{"mcpServers":{"inherited":{}}}', encoding='utf8')
+            plan = auth_plan('devin', {'WINDSURF_API_KEY': 'ambient'}, root)
+            self.assertEqual(plan['files'], {'credentials.toml': str(root / 'credentials.toml')})
+            self.assertEqual(plan['env'], {})
+
+    def test_devin_export_yields_usage_and_final_message(self):
+        from agentops.harness import usage_from_devin_export, response_from_devin_export
+        expected = result()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'export.json'
+            path.write_text(json.dumps({'schema_version': 'ATIF-v1.7', 'final_metrics': {
+                'total_prompt_tokens': 100, 'total_completion_tokens': 20,
+                'total_cached_tokens': 80, 'total_steps': 3}, 'steps': [
+                {'source': 'user', 'message': 'prompt'},
+                {'source': 'agent', 'message': ' ```json\n' + json.dumps(expected) + '\n``` '}]}))
+            usage = usage_from_devin_export(path)
+            self.assertEqual(usage['input_tokens'], 100)
+            self.assertEqual(usage['output_tokens'], 20)
+            self.assertEqual(usage['cached_input_tokens'], 80)
+            self.assertEqual(response_from_devin_export(path), expected)
+            path.write_text(json.dumps({'steps': [{'source': 'user', 'message': 'prompt'}]}))
+            with self.assertRaises(ValueError):
+                response_from_devin_export(path)
+            self.assertIsNone(usage_from_devin_export(path))
 
 
 if __name__ == '__main__':

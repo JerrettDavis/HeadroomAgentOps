@@ -70,6 +70,21 @@ class FakeWorker:
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_main_advancing_during_review_does_not_suppress_public_analysis(self):
+        collect = self.worker.collect
+        published = []
+        def changed_main(handle, job):
+            value = collect(handle, job)
+            self.github.main = 'c' * 40
+            return value
+        self.worker.collect = changed_main
+        self.coordinator.publisher = SimpleNamespace(publish=lambda job, original, value:
+            published.append(job['number']) or {'sent': [{'id': 1}], 'held': [], 'own_discussion_entries': []})
+        self.coordinator.run(self.run)
+        self.assertTrue(published)
+        self.assertTrue(any(j['state'] == 'stale' and (j.get('result') or {}).get('publication')
+                            for j in self.db.jobs(self.run)))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -428,6 +443,29 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(len(self.worker.sessions), 5)
         self.assertEqual(self.db.job(job['id'])['result']['session_id'], handle['session_id'])
 
+
+    def test_main_change_does_not_strand_completed_orphan_output(self):
+        from agentops.process import process_identity
+        from agentops.planning import packet
+        owner = json.dumps({**process_identity(), 'started': 'dead-owner'})
+        job = self.db.claim(owner, 2, self.run)
+        original = self.github.pull(job['number'])
+        prepared = self.worker.prepare(job, original, self.coordinator.evidence,
+            packet(original, self.db.get_snapshot(self.snapshot), [], self.coordinator.evidence))
+        handle = self.worker.start(prepared)
+        self.db.attach_handle(job['id'], owner, handle)
+        self.github.main = 'c' * 40
+        handle['started_at'] = 1
+        self.db.attach_handle(job['id'], owner, handle)
+        published = []
+        self.coordinator.publisher = SimpleNamespace(publish=lambda job, original, value:
+            published.append(job['number']) or {'sent': [{'id': 1}], 'held': [], 'own_discussion_entries': []})
+        self.coordinator.run(self.run)
+        recovered = self.db.job(job['id'])
+        self.assertEqual(recovered['state'], 'stale')
+        self.assertEqual(recovered['result']['session_id'], handle['session_id'])
+        self.assertEqual(published, [job['number']])
+        self.assertEqual(len(self.worker.sessions), 1)
 
     def test_worker_failure_is_visible_and_does_not_stop_other_prs(self):
         original = self.worker.collect

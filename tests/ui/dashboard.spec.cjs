@@ -1,5 +1,34 @@
 const {test, expect} = require('@playwright/test');
 
+test('automatic review status distinguishes reused analysis from unresolved holds', async ({page, request}) => {
+  const info=await (await request.get('/api/launcher')).json();
+  info.automation.settings.new_prs=true;
+  info.automation.attention=[{state:'held'},{state:'target_qualification_required'},
+    {state:'publication_qualification_required'},{state:'review_reused'},{state:'review_reused'}];
+  await page.route('**/api/launcher', route=>route.fulfill({json:info}));
+  await page.reload();
+  await expect(page.locator('#autostatus')).toContainText('3 unresolved holds');
+  await expect(page.locator('#autostatus')).toContainText('2 reused');
+});
+
+test('stopped queued records are historical, not pending live review work', async ({page, request}) => {
+  const all = await (await request.get('/api/report')).json();
+  const run = all.runs.find(r => r.total === 30);
+  const report = await (await request.get('/api/report?run=' + run.id)).json();
+  report.runs.find(r => r.id === run.id).stopped = true;
+  report.jobs.forEach(job => { job.state = 'queued'; job.stale = 0; });
+  report.states = {queued: report.jobs.length};
+  report.finished = 0;
+  report.active_prs = 0;
+  await page.route('**/api/report*', route => route.fulfill({json: report}));
+  await page.reload();
+  await expect(page.locator('#metrics .metric').first()).toContainText('Queued for dispatch');
+  await expect(page.locator('#metrics .metric').first().locator('strong')).toHaveText('0');
+  await expect(page.locator('#metrics')).toContainText('30 stopped before dispatch');
+  await expect(page.locator('.job').first()).toContainText('Stopped before dispatch');
+  await expect(page.locator('#metrics')).not.toContainText('Processed');
+});
+
 test.beforeEach(async ({page, request, baseURL}) => {
   await page.addInitScript(() => localStorage.setItem('agentops-view', 'reviews'));
   await page.route('**/*', route => new URL(route.request().url()).origin === baseURL
@@ -20,6 +49,17 @@ test.beforeEach(async ({page, request, baseURL}) => {
   await expect(page.locator('.job')).toHaveCount(30);
   await expect(page.locator('#detail>.pr-description')).toBeVisible();
   await expect(page.locator('.markdown-body h1')).toHaveText('Summary');
+});
+
+test('Devin is available as a reviewer and has allowance controls', async ({page}) => {
+  await page.getByRole('button', {name: 'New review', exact: true}).click();
+  await page.locator('#launchharness').selectOption('devin');
+  await expect(page.locator('#launchharness')).toHaveValue('devin');
+  await page.locator('#closewizard').click();
+  const card = page.locator('.allowance-card[data-provider="devin"]');
+  await expect(card.getByRole('heading', {name: 'Devin', exact: true})).toBeVisible();
+  await card.getByText('Review stop point', {exact: true}).click();
+  await expect(card.getByRole('spinbutton', {name: 'Devin stop percentage'})).toBeVisible();
 });
 
 test('provider allowance shows real windows and persists an inclusive stop point', async ({page}) => {

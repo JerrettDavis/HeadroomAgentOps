@@ -2,6 +2,30 @@
 
 import json
 import uuid
+from pathlib import Path
+
+
+def usage_from_devin_export(path):
+    """Read ATIF final_metrics written by devin --export."""
+    metrics = (json.loads(Path(path).read_text(encoding='utf8')).get('final_metrics') or {})
+    usage = {'input_tokens': metrics.get('total_prompt_tokens'),
+             'output_tokens': metrics.get('total_completion_tokens'),
+             'cached_input_tokens': metrics.get('total_cached_tokens'),
+             'steps': metrics.get('total_steps')}
+    return {key: value for key, value in usage.items() if value is not None} or None
+
+
+def response_from_devin_export(path):
+    """Take the last agent message from the ATIF export as the structured result."""
+    steps = json.loads(Path(path).read_text(encoding='utf8')).get('steps') or []
+    final = next((step for step in reversed(steps) if step.get('source') == 'agent' and
+                  isinstance(step.get('message'), str) and step['message'].strip()), None)
+    if not final:
+        raise ValueError('Devin did not produce a final assistant response')
+    text = final['message'].strip()
+    if text.startswith('```json\n') and text.endswith('\n```'):
+        text = text[8:-4]
+    return json.loads(text)
 
 
 def usage_from_events(harness, events):
@@ -50,6 +74,9 @@ RESULT_SCHEMA = {
             'properties': {'manifest_hash': {'type': 'string'},
                            'verdict': {'type': 'string', 'enum': ['clear', 'held', 'unknown']},
                            'rationale': {'type': 'string'},
+                           'review_only_verdict': {'type': 'string', 'enum': ['clear', 'held', 'unknown']},
+                           'execution_hold_scope': {'type': 'string', 'enum': ['inherited_only', 'changed_source', 'unknown']},
+                           'inherited_execution_paths': {'type': 'array', 'items': {'type': 'string'}},
                            'evidence': {'type': 'array', 'items': {'type': 'string'}}}},
         'findings': {'type': 'array', 'items': {'type': 'object', 'additionalProperties': False,
             'required': ['severity', 'path', 'line', 'description', 'evidence'],
@@ -120,7 +147,7 @@ def validate_result(value, job):
 
 class Harness:
     def __init__(self, name, model=None):
-        if name not in ('codex', 'claude', 'copilot'):
+        if name not in ('codex', 'claude', 'copilot', 'devin'):
             raise ValueError(f'Unsupported harness {name}')
         self.name = name
         self.model = model
@@ -138,6 +165,10 @@ class Harness:
                        '{"mcpServers":{}}', '--setting-sources', '', '--output-format', 'stream-json', '--verbose',
                        '--json-schema', json.dumps(RESULT_SCHEMA),
                        '--tools', 'Bash,Read,Edit,Write,Glob,Grep', '--disable-slash-commands']
+        elif self.name == 'devin':
+            command = ['devin', '--print', prompt, '--permission-mode', 'dangerous',
+                       '--respect-workspace-trust', 'false',
+                       '--export', '/job/output/export.json']
         else:
             command = ['copilot', '--autopilot', '--no-ask-user', '--allow-all',
                        '--max-autopilot-continues', '2', '--session-id', job['session_id'],
@@ -147,4 +178,6 @@ class Harness:
                        '--usage-output-file', '/job/output/usage.json']
         if self.model:
             command += ['--model', self.model]
+        if self.name == 'devin':
+            return command
         return command + (['--prompt', prompt] if self.name == 'copilot' else [prompt])

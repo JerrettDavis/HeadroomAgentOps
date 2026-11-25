@@ -174,7 +174,7 @@ def rank_prs(repo, prs, default_branch='main', resolved=None):
     return ordered
 
 
-def collect_priority(github, comparisons=None):
+def collect_priority(github, comparisons=None, *, full=False):
     """Collect complete open inventory and CI for immutable observed head commits."""
     comparisons = comparisons if comparisons is not None else {}
     comparison_lock = threading.Lock()
@@ -255,7 +255,9 @@ def collect_priority(github, comparisons=None):
         except Exception:
             resolved[(dep_repo, number)] = 'unknown'
     return {'repo': github.repo, 'default_branch': default[0], 'default_sha': default[1],
-            'prs': rank_prs(github.repo, prs, default[0], resolved)}
+            'prs': prs if full else rank_prs(github.repo, prs, default[0], resolved),
+            **({'resolved_dependencies': [{'repo': repo, 'number': number, 'state': state}
+                                         for (repo, number), state in sorted(resolved.items())]} if full else {})}
 
 
 class PriorityMonitor:

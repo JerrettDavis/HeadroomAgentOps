@@ -12,6 +12,58 @@ from agentops.cli import DEFAULTS
 
 
 class LaunchTests(unittest.TestCase):
+    def test_resume_skips_live_coordinator_after_panel_loses_process_handles(self):
+        from agentops.process import process_identity
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, github = self.setup_launcher(directory)
+            snapshot = github.snapshot.return_value
+            for pr in snapshot['prs']: pr['draft'] = False
+            run = launcher.ledger.create_run(launcher.ledger.save_snapshot(snapshot),
+                {**launcher.config, 'require_decision': True})
+            for pr in snapshot['prs']: launcher.ledger.enqueue(run, pr, snapshot['main_sha'])
+            launcher.ledger.claim(json.dumps(process_identity()), 4, run)
+            github.snapshot.reset_mock()
+            with patch('agentops.launch.subprocess.Popen') as spawn:
+                self.assertEqual(launcher.resume_reviews([run]), [])
+                spawn.assert_not_called()
+            github.snapshot.assert_not_called()
+
+    def test_unstarted_orphan_is_recovered_but_stopped_run_is_not_revived(self):
+        from agentops.process import process_identity
+        for stopped in (False, True):
+            with self.subTest(stopped=stopped), tempfile.TemporaryDirectory() as directory:
+                launcher, github = self.setup_launcher(directory)
+                snapshot = github.snapshot.return_value
+                for pr in snapshot['prs']: pr['draft'] = False
+                run = launcher.ledger.create_run(launcher.ledger.save_snapshot(snapshot), launcher.config)
+                launcher.ledger.enqueue(run, snapshot['prs'][0], snapshot['main_sha'])
+                owner = json.dumps({**process_identity(), 'started': 'dead-owner'})
+                launcher.ledger.claim(owner, 4, run)
+                if stopped: launcher.ledger.stop(run)
+                with patch('agentops.launch.subprocess.Popen') as spawn:
+                    spawn.return_value.poll.return_value = None
+                    launcher.refresh_reviews(snapshot)
+                    self.assertEqual(spawn.call_count, 0 if stopped else 1)
+
+    def test_refresh_recovers_orphan_run_after_main_changes_without_duplicate_spawn(self):
+        from agentops.process import process_identity
+        with tempfile.TemporaryDirectory() as directory:
+            launcher, github = self.setup_launcher(directory)
+            snapshot = github.snapshot.return_value
+            for pr in snapshot['prs']: pr['draft'] = False
+            run = launcher.ledger.create_run(launcher.ledger.save_snapshot(snapshot), launcher.config)
+            identity = launcher.ledger.enqueue(run, snapshot['prs'][0], snapshot['main_sha'])
+            owner = json.dumps({**process_identity(), 'started': 'dead-owner'})
+            launcher.ledger.claim(owner, 4, run)
+            launcher.ledger.attach_handle(identity, owner, {'container': 'saved-worker'})
+            snapshot = {**snapshot, 'main_sha': 'new-main'}
+            with patch('agentops.launch.subprocess.Popen') as spawn:
+                spawn.return_value.poll.return_value = None
+                launcher.refresh_reviews(snapshot)
+                launcher.refresh_reviews(snapshot)
+                spawn.assert_called_once()
+                self.assertIn(run, launcher.processes)
+
     def test_resume_withdraws_queued_jobs_superseded_by_a_newer_review(self):
         with tempfile.TemporaryDirectory() as directory:
             launcher, github = self.setup_launcher(directory)

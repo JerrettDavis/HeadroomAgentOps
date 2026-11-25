@@ -72,7 +72,8 @@ with tempfile.TemporaryDirectory(prefix='agentops-ui-') as directory:
                        (f'action-{index}', job, json.dumps({'kind': 'review', 'body': label + ' comment'}), 'sent', '{}', index + 1))
         db.execute('UPDATE jobs SET state=?,attempt=1 WHERE id=?', ('running', next_jobs[1]))
     config = {**DEFAULTS, 'repo': 'example/repository', 'state': directory,
-              'auth_root': directory, 'publish': False, 'provider_limits': {'claude': {'stop_percent': 80}}}
+              'auth_root': directory, 'publish': False, 'provider_limits': {
+                  'claude': {'stop_percent': 80}, 'devin': {'stop_percent': 80}}}
     def synthetic_usage(config):
         return {'source': 'Synthetic account usage', 'blocked': False, 'auth_fingerprint': 'synthetic', 'windows': [{
             'id': 'weekly', 'label': 'Weekly', 'period': 'weekly', 'window_minutes': 10080,

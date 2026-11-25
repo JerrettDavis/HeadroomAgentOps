@@ -19,7 +19,7 @@ from agentops.worker import auth_plan, container_command, verify_copilot_scopes,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('harness', choices=['codex', 'claude', 'copilot'])
+    parser.add_argument('harness', choices=['codex', 'claude', 'copilot', 'devin'])
     parser.add_argument('--auth-root')
     parser.add_argument('--model')
     args = parser.parse_args()

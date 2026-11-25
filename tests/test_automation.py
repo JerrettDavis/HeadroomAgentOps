@@ -7,9 +7,210 @@ from unittest.mock import Mock, patch
 from agentops.automation import AutoReview
 from agentops.launch import Launcher
 from agentops.cli import DEFAULTS
+from agentops.evidence import Evidence
 
 
 class AutomationTests(unittest.TestCase):
+    def test_own_qualification_comment_does_not_requeue_an_unpublished_approval(self):
+        from agentops.model import digest
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            previous = {'number':2,'head_sha':'a','base_ref':'main','base_sha':'base',
+                        'head_repo':'o/r','updated_at':'old','files':[],'comments':[]}
+            body = 'Approval remains pending CI qualification.'
+            own = {'kind':'comment','id':1,'body_hash':digest(body)}
+            proof = {'number':2,'head_sha':'a','main_sha':'m'*40,
+                     'reviewed_pr_evidence':evidence.put(previous),'own_discussion_entries':[own],
+                     'actions':[{'kind':'review','event':'APPROVE'}],
+                     'publication':{'sent':[{'id':1}]}}
+            prior = [{'id':'analysis','head_sha':'a','main_sha':'m'*40,'state':'needs_followup',
+                      'result':{**proof,'evidence_record':evidence.put(proof)}}]
+            current = {**previous,'updated_at':'new','comments':[{'id':1,'body':body}]}
+            launcher.github.pull.return_value = current
+            decision = auto.material_update(current,prior,'m'*40)
+            self.assertFalse(decision['material'])
+            self.assertEqual(decision['reason'],'unchanged_reviewed_head')
+            self.assertFalse(auto.material_update(current,prior,'m'*40)['material'])
+            launcher.github.pull.assert_called_once_with(2,discussion_only=True)
+
+    def test_slow_inventory_does_not_duplicate_a_review_queued_during_poll(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'new_prs': True})
+            auto.data.update(initialized=True, seen={})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.ledger.jobs.side_effect = [[], [{'repo':'o/r','number':2,'head_sha':'a',
+                'main_sha':'m'*40,'state':'queued','stale':False,'run_id':'manual'}]]
+            launcher.ledger.get_run.return_value = {'stopped':False,'config':{}}
+            auto.tick()
+            launcher.launch.assert_not_called()
+            self.assertEqual(auto.status()['eligible'], 0)
+
+    def test_context_only_read_cannot_supply_changed_head_file_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            previous = {'number': 2, 'head_sha': 'old', 'base_ref': 'main', 'head_repo': 'o/fork',
+                        'updated_at': 'old', 'body': 'same',
+                        'files': [{'filename': 'a.py', 'status': 'modified',
+                                   'patch': '@@ -1 +1 @@\n-a()\n+b()'}]}
+            proof = {'number': 2, 'head_sha': 'old', 'reviewed_pr_evidence': evidence.put(previous)}
+            prior = [{'id': 'analysis', 'state': 'stale', 'head_sha': 'old',
+                      'result': {'evidence_record': evidence.put(proof)}}]
+            current = {**previous, 'head_sha': 'new', 'updated_at': 'new'}
+            context = {k:v for k,v in current.items() if k != 'files'}
+            launcher.github.pull.side_effect = [context, current]
+            decision = auto.material_update(current, prior, 'm' * 40)
+            self.assertFalse(decision['material'])
+            self.assertEqual(launcher.github.pull.call_count, 2)
+            self.assertEqual(launcher.github.pull.call_args_list[0].kwargs, {'discussion_only': True})
+            self.assertEqual(launcher.github.pull.call_args_list[1].kwargs, {})
+
+    def test_main_invalidated_unstarted_job_keeps_current_head_eligible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None}})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'CHANGES_REQUESTED'
+            launcher.ledger.jobs.return_value = [{'repo':'o/r','number':2,'head_sha':'a',
+                'main_sha':'old-main','state':'stale','stale':True,'run_id':'invalidated','result':None}]
+            launcher.ledger.get_run.return_value = {'stopped':False,'config':{}}
+            auto.tick()
+            launcher.launch.assert_called_once()
+
+    def test_equivalent_update_cannot_hide_an_unpublished_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            previous = {'number': 2, 'head_sha': 'old', 'files': []}
+            proof = {'number': 2, 'head_sha': 'old', 'reviewed_pr_evidence': evidence.put(previous),
+                     'actions': [{'kind': 'review', 'event': 'APPROVE', 'body': 'Validated.'}]}
+            prior = [{'id': 'analysis', 'state': 'stale', 'head_sha': 'old',
+                      'result': {'evidence_record': evidence.put(proof)}}]
+            launcher.github.pull.return_value = {**previous, 'head_sha': 'new'}
+            decision = auto.material_update({'number': 2, 'head_sha': 'new'}, prior, 'm' * 40)
+            self.assertTrue(decision['material'])
+            self.assertEqual(decision['reason'], 'unpublished_approval_requires_qualification')
+
+    def test_new_proof_on_unchanged_head_requires_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            previous = {'number': 2, 'head_sha': 'a', 'base_ref': 'main',
+                        'head_repo': 'o/fork', 'updated_at': 'old', 'body': 'Proof missing', 'files': []}
+            proof = {'number': 2, 'head_sha': 'a', 'main_sha': 'm' * 40,
+                     'actions': [{'kind': 'review', 'event': 'APPROVE'}],
+                     'reviewed_pr_evidence': evidence.put(previous)}
+            prior = [{'id': 'analysis', 'state': 'stale', 'head_sha': 'a',
+                      'result': {'evidence_record': evidence.put(proof)}}]
+            current = {**previous, 'updated_at': 'new', 'body': 'Live behavior proof attached'}
+            launcher.github.pull.return_value = current
+            decision = auto.material_update(current, prior, 'm' * 40)
+            self.assertTrue(decision['material'])
+            self.assertEqual(decision['reason'], 'review_context_changed')
+            launcher.github.pull.assert_called_once_with(2, discussion_only=True)
+
+    def test_completed_changes_request_does_not_hide_new_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None, 'updated_at': 'old'}})
+            snap = self.snapshot((2, 'a', False, 'user'))
+            snap['prs'][0].update(updated_at='new', review_decision='CHANGES_REQUESTED')
+            launcher.github.snapshot.return_value = snap
+            launcher.ledger.jobs.return_value = [{'id': 'analysis', 'repo': 'o/r', 'number': 2,
+                'head_sha': 'a', 'main_sha': 'm' * 40, 'state': 'needs_followup', 'stale': False,
+                'run_id': 'prior', 'result': {}}]
+            auto.material_update = Mock(return_value={'material': True, 'reason': 'review_context_changed'})
+            auto.tick()
+            launcher.launch.assert_called_once()
+
+    def test_proof_update_is_queued_while_another_run_is_busy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None, 'updated_at': 'old'}})
+            snap = self.snapshot((2, 'a', False, 'user'))
+            snap['prs'][0].update(updated_at='new', review_decision='CHANGES_REQUESTED')
+            launcher.github.snapshot.return_value = snap
+            launcher.ledger.jobs.return_value = [{'id': 'analysis', 'repo': 'o/r', 'number': 2,
+                'head_sha': 'a', 'main_sha': 'm' * 40, 'state': 'needs_followup', 'stale': False,
+                'run_id': 'prior', 'result': {}}]
+            auto.material_update = Mock(return_value={'material': True, 'reason': 'review_context_changed'})
+            launcher.status.return_value = {'other': {'running': True}}
+            auto.tick()
+            launcher.launch.assert_called_once()
+            launcher.status.return_value = {}
+            auto.tick()
+            launcher.launch.assert_called_once()
+
+    def test_proof_added_during_active_review_is_revisited_after_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None, 'updated_at': 'old'}})
+            snap = self.snapshot((2, 'a', False, 'user'))
+            snap['prs'][0].update(updated_at='new', review_decision='CHANGES_REQUESTED')
+            launcher.github.snapshot.return_value = snap
+            job = {'id': 'analysis', 'repo': 'o/r', 'number': 2,
+                   'head_sha': 'a', 'main_sha': 'm' * 40, 'state': 'running', 'stale': False,
+                   'run_id': 'prior', 'result': {}}
+            launcher.ledger.jobs.return_value = [job]
+            launcher.ledger.get_run.return_value = {'stopped': False, 'config': {}}
+            auto.material_update = Mock(return_value={'material': True, 'reason': 'review_context_changed'})
+            auto.tick()
+            launcher.launch.assert_not_called()
+            job['state'] = 'needs_followup'
+            auto.tick()
+            launcher.launch.assert_called_once()
+
+    def test_equivalent_head_update_skips_worker_and_persists_notes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            source = {'number': 1, 'head_sha': 'old', 'base_sha': 'base',
+                      'files': [{'filename': 'a.py', 'status': 'modified',
+                                 'patch': '@@ -1 +1 @@\n-a()\n+b()'}]}
+            evidence = Evidence(Path(directory) / 'evidence')
+            proof = {'number': 1, 'head_sha': 'old',
+                     'reviewed_pr_evidence': evidence.put(source)}
+            launcher.ledger.jobs.return_value = [{'id': 'prior', 'repo': 'o/r',
+                'number': 1, 'head_sha': 'old', 'state': 'stale',
+                'result': {'evidence_record': evidence.put(proof)}}]
+            launcher.github.snapshot.return_value = self.snapshot((1, 'old', False, 'user'))
+            auto.tick()
+            launcher.github.snapshot.return_value = self.snapshot((1, 'new', False, 'user'))
+            launcher.github.pull.return_value = {**source, 'head_sha': 'new'}
+            auto.tick()
+            launcher.launch.assert_not_called()
+            notes = auto.status()['review_notes']['1']
+            self.assertEqual(notes['reason'], 'equivalent_contribution')
+            self.assertEqual(notes['source_job'], 'prior')
+            self.assertEqual(AutoReview(launcher).status()['review_notes']['1'], notes)
+            launcher.github.pull.return_value = {**source, 'head_sha': 'new',
+                'files': [{**source['files'][0], 'patch': '@@ -8 +8 @@\n-a()\n+b()'}]}
+            launcher.github.review_base_content.side_effect = lambda value, file: (
+                'a()\n' if value['head_sha'] == 'old' else 'header\n' * 7 + 'a()\n')
+            decision = auto.material_update(launcher.github.snapshot.return_value['prs'][0],
+                                           launcher.ledger.jobs.return_value, 'm' * 40)
+            self.assertFalse(decision['material'])
+            launcher.github.pull.return_value = {**source, 'head_sha': 'new', 'base_ref': 'release'}
+            decision = auto.material_update(launcher.github.snapshot.return_value['prs'][0],
+                                           launcher.ledger.jobs.return_value, 'm' * 40)
+            self.assertTrue(decision['material'])
+
+    def test_material_update_still_launches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot((1, 'old', False, 'user'))
+            auto.tick()
+            launcher.github.snapshot.return_value = self.snapshot((1, 'new', False, 'user'))
+            auto.tick()
+            launcher.launch.assert_called_once()
+
     def test_slow_reconciliation_does_not_block_inventory_or_new_pr_dispatch(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
@@ -130,7 +331,7 @@ class AutomationTests(unittest.TestCase):
             auto.tick()
             launcher.launch.assert_called_once()
 
-    def test_invalid_toggle_and_busy_coordinator(self):
+    def test_invalid_toggle_and_new_pr_is_queued_while_coordinator_is_busy(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
             with self.assertRaises(ValueError):
@@ -141,7 +342,7 @@ class AutomationTests(unittest.TestCase):
             launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
             launcher.status.return_value = {'manual': {'running': True}}
             auto.tick()
-            launcher.launch.assert_not_called()
+            launcher.launch.assert_called_once()
             launcher.status.return_value = {}
             auto.tick()
             launcher.launch.assert_called_once()
@@ -185,6 +386,58 @@ class AutomationTests(unittest.TestCase):
             launcher.launch.assert_not_called()
             self.assertEqual(auto.status()['attention'][0]['number'], 2)
 
+    def test_old_main_approval_gets_current_target_review_instead_of_indefinite_hold(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'new_prs': True, 'updated_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'CHANGES_REQUESTED'
+            launcher.ledger.jobs.return_value = [{'id': 'review', 'repo': 'o/r', 'number': 2,
+                'head_sha': 'a', 'main_sha': 'old-main', 'state': 'held', 'run_id': 'old',
+                'result': {'outcome': 'ready', 'actions': [{'kind': 'review', 'event': 'APPROVE'}]}}]
+            launcher.ledger.get_run.return_value = {'stopped': False, 'config': {'publish': True}}
+            auto.tick()
+            launcher.launch.assert_called_once()
+            hold=auto.status()['attention'][0]
+            self.assertEqual(hold['state'], 'target_qualification_required')
+            self.assertEqual(hold['source_job'], 'review')
+            self.assertIn('main changed', hold['reasons'][0])
+
+    def test_new_current_main_analysis_supersedes_old_approval_hold(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'new_prs': True, 'updated_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'CHANGES_REQUESTED'
+            launcher.ledger.jobs.return_value = [
+                {'id': 'old', 'repo': 'o/r', 'number': 2, 'head_sha': 'a', 'main_sha': 'old-main',
+                 'created': 1, 'state': 'held', 'run_id': 'old',
+                 'result': {'outcome': 'ready', 'actions': [{'kind': 'review', 'event': 'APPROVE'}]}},
+                {'id': 'new', 'repo': 'o/r', 'number': 2, 'head_sha': 'a', 'main_sha': 'm' * 40,
+                 'created': 2, 'state': 'needs_followup', 'run_id': 'new',
+                 'result': {'outcome': 'needs_followup', 'actions': [{'kind': 'review', 'event': 'REQUEST_CHANGES'}]}}]
+            launcher.ledger.get_run.return_value = {'stopped': False, 'config': {'publish': True}}
+            auto.tick()
+            self.assertFalse(any(h['state'] == 'target_qualification_required' for h in auto.status()['attention']))
+            launcher.launch.assert_not_called()
+
+    def test_unpublished_current_main_approval_keeps_qualification_hold_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'CHANGES_REQUESTED'
+            launcher.ledger.jobs.return_value = [{'id': 'review', 'repo': 'o/r', 'number': 2,
+                'head_sha': 'a', 'main_sha': 'm' * 40, 'state': 'held', 'run_id': 'current',
+                'result': {'outcome': 'needs_followup', 'qualification_limits': ['Hosted CI failed'],
+                           'actions': [{'kind': 'review', 'event': 'APPROVE'}]}}]
+            launcher.ledger.get_run.return_value = {'stopped': False, 'config': {'publish': True}}
+            auto.tick()
+            hold=auto.status()['attention'][0]
+            self.assertEqual(hold['state'], 'publication_qualification_required')
+            self.assertEqual(hold['reasons'], ['Hosted CI failed'])
+            launcher.launch.assert_not_called()
+
     def test_stopped_unstarted_mandatory_plan_is_not_a_completed_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
             auto, launcher = self.setup_auto(directory)
@@ -196,6 +449,47 @@ class AutomationTests(unittest.TestCase):
             launcher.ledger.get_run.return_value = {'stopped':True,'config':{'require_decision':True}}
             auto.tick()
             launcher.launch.assert_called_once()
+
+    def test_stopped_unstarted_plan_cannot_hide_unreviewed_changed_head(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            auto.configure({'updated_prs': True})
+            auto.data.update(initialized=True, seen={'2': {'head': 'a', 'pending': None}})
+            launcher.github.snapshot.return_value = self.snapshot((2, 'a', False, 'user'))
+            launcher.github.snapshot.return_value['prs'][0]['review_decision'] = 'CHANGES_REQUESTED'
+            launcher.ledger.jobs.return_value = [{'repo': 'o/r', 'number': 2, 'head_sha': 'a',
+                'main_sha': 'm' * 40, 'state': 'queued', 'run_id': 'stopped', 'result': None}]
+            launcher.ledger.get_run.return_value = {'stopped': True, 'config': {}}
+            auto.tick()
+            launcher.launch.assert_called_once()
+
+    def test_skip_cache_is_bound_to_target_and_inventory_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            pr = {**self.snapshot((2, 'a', False, 'user'))['prs'][0],
+                  'base_sha': 'b' * 40, 'base_ref': 'main', 'head_repo': 'o/fork'}
+            identity = {key: pr.get(key) for key in
+                        ('number', 'head_sha', 'base_sha', 'base_ref', 'head_repo', 'updated_at')}
+            record = {'material': False, 'reason': 'equivalent_contribution',
+                      'inventory_identity': identity, 'main_sha': 'm' * 40, 'source_job': 'prior'}
+            evidence = Evidence(Path(directory) / 'evidence')
+            auto.data['review_notes'] = {'2': {**record, 'evidence': evidence.put(record)}}
+            self.assertFalse(auto.material_update(pr, [], 'm' * 40)['material'])
+            self.assertTrue(auto.material_update({**pr, 'base_ref': 'release'}, [], 'm' * 40)['material'])
+
+    def test_stopped_duplicate_of_analysed_head_reuses_without_full_pr_ingestion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auto, launcher = self.setup_auto(directory)
+            evidence = Evidence(Path(directory) / 'evidence')
+            pr = {**self.snapshot((2, 'a', False, 'user'))['prs'][0],
+                  'base_ref': 'main', 'head_repo': 'o/fork', 'files': []}
+            proof = {'number': 2, 'head_sha': 'a', 'reviewed_pr_evidence': evidence.put(pr)}
+            prior = [{'id': 'analysis', 'state': 'stale', 'head_sha': 'a',
+                      'result': {'evidence_record': evidence.put(proof)}}]
+            decision = auto.material_update(pr, prior, 'm' * 40)
+            self.assertFalse(decision['material'])
+            self.assertEqual(decision['reason'], 'unchanged_reviewed_head')
+            launcher.github.pull.assert_not_called()
 
     def test_real_launcher_persists_plan_and_restart_does_not_spawn_twice(self):
         with tempfile.TemporaryDirectory() as directory:

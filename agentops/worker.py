@@ -127,6 +127,11 @@ def auth_plan(harness, environ, auth_root, copilot_scopes=None):
             raise ValueError('Copilot requires a verified model-only AGENTOPS_COPILOT_TOKEN; '
                              'general GitHub credentials are never forwarded')
         env['COPILOT_GITHUB_TOKEN'] = environ['AGENTOPS_COPILOT_TOKEN']
+    elif harness == 'devin':
+        if auth_root and (Path(auth_root) / 'credentials.toml').is_file():
+            files['credentials.toml'] = str(Path(auth_root) / 'credentials.toml')
+        else:
+            raise ValueError('Devin needs an explicit credentials.toml directory')
     else:
         raise ValueError('Unknown harness')
     return {'files': files, 'env': env}
@@ -176,7 +181,14 @@ def stage_review_context(directory, job, pr, evidence):
     reusable = (previous['head_sha'] == pr['head_sha'] and
                 previous.get('base_sha') == pr.get('base_sha') and
                 proof['main_sha'] == job['main_sha'])
+    previous_files = {f['filename']: f for f in previous.get('files', [])}
+    covered = set(proof.get('coverage', {}).get('files', []))
+    unchanged = sorted(f['filename'] for f in pr.get('files', [])
+                       if f['filename'] in covered and
+                       re.fullmatch(r'[a-f0-9]{40,64}', f.get('sha', '')) and
+                       previous_files.get(f['filename'], {}).get('sha') == f['sha'])
     record = {**context, 'coverage_reusable': reusable,
+              'unchanged_source_files': unchanged,
               'unchanged_head_files':(sorted(set(proof.get('coverage',{}).get('files',[])) &
                                             {f['filename'] for f in pr.get('files',[])})
                                       if previous['head_sha']==pr['head_sha'] else []),
@@ -184,6 +196,18 @@ def stage_review_context(directory, job, pr, evidence):
               'previous_main_sha': proof['main_sha']}
     (directory / 'input' / 'previous-review.json').write_text(canonical(proof), encoding='utf8')
     (directory / 'input' / 'previous-review-context.json').write_text(canonical(record), encoding='utf8')
+    notes = {key: proof[key] for key in (
+        'number', 'head_sha', 'main_sha', 'summary', 'findings', 'qualification_limits',
+        'source_review', 'coverage', 'actions', 'outcome') if key in proof}
+    notes['scope'] = 'prior_analysis_not_current_approval_or_test_evidence'
+    (directory / 'input' / 'previous-review-notes.json').write_text(canonical(notes), encoding='utf8')
+    delta = {'previous_head_sha': previous['head_sha'], 'head_sha': pr['head_sha'],
+             'files': [f for f in pr.get('files', []) if f['filename'] not in unchanged],
+             'removed_paths': sorted(previous_files.keys() -
+                                     {f['filename'] for f in pr.get('files', [])}),
+             'unchanged_source_files': unchanged,
+             'requires_target_interaction_check': proof['main_sha'] != job['main_sha']}
+    (directory / 'input' / 'review-delta.json').write_text(canonical(delta), encoding='utf8')
     return True
 
 
@@ -258,11 +282,16 @@ class Worker:
         assignment['prompt'] = (
             'Review ONLY the PR assigned in /job/input/packet.json. '
             'Read each required evidence artifact once; use targeted lookups afterward. '
-            'If /job/input/previous-review-context.json exists, read it and previous-review.json once. '
+            'If /job/input/previous-review-context.json exists, read it, previous-review-notes.json, '
+            'and review-delta.json once. The full previous-review.json is available for targeted lookups. '
             'Preserve unresolved prior findings and focus work on changed source, discussion, or CI. '
             'Reuse source-file coverage only when coverage_reusable is true and record its provenance. '
             'Files in unchanged_head_files were already inspected at this identical head: reuse their '
             'source-reading coverage, while separately checking changed target/main interactions. '
+            'Files in unchanged_source_files have verified identical Git blobs across revisions: '
+            'reuse their source-reading coverage and focus source ingestion on review-delta.json. '
+            'Check changed target/main interactions and preserve unresolved findings; identical blobs '
+            'do not grant current CI qualification, approval, or passing-test evidence. '
             'Do not rerun unchanged tests merely to restate a known hold. Earlier-head tests are context, '
             'not passing evidence for a new head; distinguish reused evidence from newly executed tests. '
             'If assignment.result.review_task is qualification, the prior source review is not a completed '
@@ -278,8 +307,16 @@ class Worker:
             'If shared-workflow-audit.json is staged, reuse its exact-manifest audit rather than '
             'repeat the same source inspection. A held shared audit remains a hold; it does not '
             'authorize execution or approval. Inspect only genuinely changed or uncovered dependencies. '
-            'If assignment.require_decision is true, complete this PR review and propose one final review '
-            'action with event APPROVE or REQUEST_CHANGES, not COMMENT, except for Dependabot PRs. Use APPROVE only after the '
+            'If assignment.require_decision is true, complete this PR review and propose a final review '
+            'action with event APPROVE or REQUEST_CHANGES when supported, or COMMENT when qualification remains incomplete. '
+            'Inherited workflow execution prerequisites are not contributor code findings or reasons to request unrelated changes. '
+            'Record those prerequisites in source_review and qualification_limits, keep the execution verdict held, '
+            'and propose code-review approval when the changed code and required validation pass without defects; '
+            'for a fully reviewed source delta, set source_review.review_only_verdict to clear. '
+            'If its execution verdict remains held solely for inherited inputs, set execution_hold_scope '
+            'to inherited_only and list every affected file in inherited_execution_paths; the coordinator '
+            'will verify their immutable blobs match main. Newly introduced source hazards remain findings. '
+            'the coordinator must verify a review-only baseline before publishing that approval. Use APPROVE only after the '
             'applicable validation and code review support it. Request concrete changes or missing '
             'required proof for actual PR blockers; do not invent defects to obtain a negative decision. '
             'If review-only-baseline.json exists, the coordinator verified that workflow provenance '
@@ -460,6 +497,7 @@ class Worker:
         if target.is_symlink() or target.resolve().parent != directory.resolve():
             raise ValueError('Diagnostic output path is not owned')
         text = self.runner(['docker', 'logs', handle['container']], combine_output=True)
-        text = redact(text, collect_secrets((directory.parent / 'auth').glob('*.json')))
+        auth = directory.parent / 'auth'
+        text = redact(text, collect_secrets([*auth.glob('*.json'), *auth.glob('*.toml')]))
         target.write_text(text, encoding='utf8')
         return text[-4000:]

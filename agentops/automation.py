@@ -4,6 +4,24 @@ import json
 import threading
 import time
 
+from .evidence import Evidence
+from .discussion import fingerprint
+from .material_diff import compare_review_diff, hunk_coordinates
+
+
+def unpublished_revision(proof, head_sha, main_sha, source_main=None):
+    """Only changed revisions require a new qualification session.
+
+    Same-revision CI holds are reconciled mechanically. Discussion changes
+    still pass through fingerprint comparison, excluding our own publications.
+    """
+    reviewed_main = proof.get('main_sha') or source_main
+    changed = (proof.get('head_sha') != head_sha or
+               (reviewed_main is not None and reviewed_main != main_sha))
+    return (changed and any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
+                            for a in proof.get('actions', [])) and
+            (proof.get('publication') or {}).get('decision') != 'APPROVE')
+
 
 class AutoReview:
     def __init__(self, launcher):
@@ -61,6 +79,112 @@ class AutoReview:
             return {**{key: value for key, value in self.data.items() if key != 'seen'},
                     'settings': dict(self.data['settings']), 'error': self.error}
 
+    def material_update(self, pr, prior, main_sha):
+        """Persist scheduling notes, keeping the last actual analysis as baseline.
+
+        Manual launches bypass this automatic-only filter and use --force-fresh.
+        A skipped update never becomes a reviewed or approved ledger job.
+        """
+        notes = self.data.setdefault('review_notes', {})
+        evidence = Evidence(self.launcher.root / 'evidence')
+        inventory_identity = {key: pr.get(key) for key in
+                              ('number', 'head_sha', 'base_sha', 'base_ref', 'head_repo', 'updated_at')}
+        cached = notes.get(str(pr['number']), {})
+        if (all(pr.get(key) for key in ('base_sha', 'base_ref', 'head_repo', 'updated_at')) and
+                cached.get('inventory_identity') == inventory_identity and
+                cached.get('main_sha') == main_sha and cached.get('material') is False):
+            try:
+                recorded = evidence.get(cached['evidence']['sha256'])
+                if recorded == {key: value for key, value in cached.items() if key != 'evidence'}:
+                    prior_proof = evidence.get(cached['prior_review']['sha256']) if cached.get('prior_review') else {}
+                    if not unpublished_revision(prior_proof, pr['head_sha'], main_sha):
+                        return cached
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        candidates = sorted(prior, key=lambda j: j.get('created', 0), reverse=True)
+        for job in candidates:
+            reference = (job.get('result') or {}).get('evidence_record')
+            if not reference or job.get('state') not in (
+                    'ready', 'held', 'reviewed', 'awaiting_ci', 'needs_followup', 'stale'):
+                continue
+            try:
+                proof = evidence.get(reference['sha256'])
+                previous = evidence.get(proof['reviewed_pr_evidence']['sha256'])
+                if (proof['number'] != pr['number'] or previous['number'] != pr['number'] or
+                        proof['head_sha'] != job['head_sha'] or
+                        previous['head_sha'] != job['head_sha']):
+                    continue
+                if unpublished_revision(proof, pr['head_sha'], main_sha, job.get('main_sha')):
+                    return {'material': True, 'reason': 'unpublished_approval_requires_qualification',
+                            'source_job': job['id']}
+                current = None
+                if (previous.get('updated_at') and pr.get('updated_at') and
+                        previous['updated_at'] != pr['updated_at']):
+                    current = self.launcher.github.pull(pr['number'], discussion_only=True)
+                    if current['head_sha'] != pr['head_sha']:
+                        return {'material': True, 'reason': 'head_changed_during_comparison'}
+                    omitted = proof.get('own_discussion_entries', [])
+                    if fingerprint(previous, omitted) != fingerprint(current, omitted):
+                        return {'material': True, 'reason': 'review_context_changed',
+                                'source_job': job['id']}
+                if (previous['head_sha'] == pr['head_sha'] and
+                        isinstance(previous.get('files'), list) and pr.get('base_ref') and
+                        previous.get('base_ref') == pr['base_ref'] and pr.get('head_repo') and
+                        previous.get('head_repo') == pr['head_repo']):
+                    # A stopped duplicate cannot create new source at an already
+                    # analysed immutable head. Target/main qualification stays separate.
+                    record = {'material': False, 'reason': 'unchanged_reviewed_head',
+                              'head_sha': pr['head_sha'], 'main_sha': main_sha,
+                              'inventory_identity': inventory_identity, 'source_job': job['id'],
+                              'prior_review': reference, 'current_inventory': evidence.put(pr),
+                              'recorded_at': time.time(), 'scope': 'scheduling_only_no_approval'}
+                    notes[str(pr['number'])] = {**record, 'evidence': evidence.put(record)}
+                    return record
+                if current is None or not isinstance(current.get('files'), list):
+                    current = self.launcher.github.pull(pr['number'])
+                if current['head_sha'] != pr['head_sha']:
+                    return {'material': True, 'reason': 'head_changed_during_comparison'}
+                if not isinstance(previous.get('files'), list) or not isinstance(current.get('files'), list):
+                    return {'material': True, 'reason': 'incomplete_diff'}
+                # Fetch full content only for changed Python/manifests. Patch-only
+                # whitespace guesses can hide literals and significant indentation.
+                previous = {**previous, 'files': [dict(f) for f in previous.get('files', [])]}
+                current = {**current, 'files': [dict(f) for f in current.get('files', [])]}
+                old_files = {f['filename']: f for f in previous['files']}
+                for file in current['files']:
+                    old_file = old_files.get(file['filename'])
+                    if old_file and hunk_coordinates(old_file) != hunk_coordinates(file):
+                        for original_pr, item in ((previous, old_file), (current, file)):
+                            try:
+                                content = self.launcher.github.review_base_content(original_pr, item)
+                                if isinstance(content, str):
+                                    item['base_content'] = content
+                            except (RuntimeError, OSError, ValueError, KeyError):
+                                pass
+                    if (old_file and old_file.get('patch') != file.get('patch') and
+                            (file['filename'].endswith('.py') or
+                             file['filename'].split('/')[-1] in ('package.json', 'pyproject.toml'))):
+                        for item in (old_file, file):
+                            if item.get('sha'):
+                                try:
+                                    content = self.launcher.github.review_blob(item['sha'])
+                                    if isinstance(content, str):
+                                        item['content'] = content
+                                except (RuntimeError, OSError, ValueError, KeyError):
+                                    pass
+                decision = compare_review_diff(previous, current)
+                record = {**decision, 'head_sha': pr['head_sha'], 'main_sha': main_sha,
+                          'inventory_identity': inventory_identity,
+                          'source_job': job['id'], 'prior_review': reference,
+                          'current_pr': evidence.put(current), 'recorded_at': time.time(),
+                          'scope': 'scheduling_only_no_approval'}
+                notes[str(pr['number'])] = {**record, 'evidence': evidence.put(record)}
+                return record
+            except (OSError, ValueError, KeyError, TypeError):
+                # An unavailable baseline must never suppress a needed review.
+                continue
+        return {'material': True, 'reason': 'no_verified_prior_review'}
+
     def tick(self, background=False):
         # Slow GitHub requests must not block dashboard status or toggle changes.
         with self.poll_lock:
@@ -114,18 +238,25 @@ class AutoReview:
             for pr in snapshot['prs']:
                 key = str(pr['number'])
                 old = seen.get(key)
+                context_update = bool(old and (old.get('context_pending') or
+                                      (old.get('updated_at') and pr.get('updated_at')
+                                       and old['updated_at'] != pr['updated_at'])))
                 head = pr['head_sha']
                 event = old.get('pending') if old else None
                 prior = [j for j in jobs if j['number'] == pr['number']]
+                target_review_required = False
                 required = pr.get('review_decision') == 'REVIEW_REQUIRED'
                 if self.data['initialized']:
                     if old is None:
                         event = 'new_prs'
                     elif old['head'] != head and (event != 'new_prs' or not settings['new_prs']):
                         event = 'updated_prs'
+                    elif context_update:
+                        event = 'updated_prs'
                 if required and not event:
                     event = 'updated_prs' if prior else 'new_prs'
-                current[key] = {'head': head, 'pending': event}
+                current[key] = {'head': head, 'pending': event, 'updated_at': pr.get('updated_at'),
+                                'context_pending': context_update}
                 exact = [j for j in prior if j['head_sha'] == head]
                 active = any(j.get('state') in ('queued', 'running') and not j.get('stale')
                              and not run_info(j).get('stopped') for j in exact)
@@ -137,10 +268,49 @@ class AutoReview:
                              and ((j.get('result') or {}).get('require_decision') or
                                   run_info(j).get('config', {}).get('require_decision'))]
                 completed = any(not j.get('stale') and j.get('state') not in
-                                ('stale', 'failed', 'interrupted', 'cancelled') for j in exact)
-                if active or (completed and not required) or (required and attempted):
-                    current[key]['pending'] = None
-                    if required and attempted and pr['author'].lower() not in excluded:
+                                ('queued', 'running', 'stale', 'failed', 'interrupted', 'cancelled') for j in exact)
+                if (not active and pr['author'].lower() not in excluded and not pr.get('draft', True)
+                        and pr.get('review_decision') != 'APPROVED'):
+                    analyses = [j for j in exact if not run_info(j).get('stopped')
+                                and j.get('state') not in ('queued', 'running', 'failed', 'cancelled', 'interrupted')
+                                and (j.get('result') or {}).get('outcome') in
+                                    ('ready', 'awaiting_ci', 'reviewed', 'needs_followup')]
+                    source = max(analyses, key=lambda j: (j.get('created', 0), j.get('id', ''))) if analyses else None
+                    if (source
+                            and ((source.get('result') or {}).get('publication') or {}).get('decision') != 'APPROVE'
+                            and any(a.get('kind') == 'review' and a.get('event') == 'APPROVE'
+                                    for a in (source.get('result') or {}).get('actions', []))):
+                        main_changed = source.get('main_sha') != snapshot['main_sha']
+                        if main_changed and settings['updated_prs']:
+                            target_review_required = True
+                            event = 'updated_prs'
+                            current[key]['pending'] = event
+                        reasons = (['Source review proposed approval, but main changed; '
+                                    'current-target qualification is required before publication.'] if main_changed
+                                   else (source['result'].get('qualification_limits') or
+                                         ['Saved approval requires publication qualification.']))
+                        attention.append({'number': pr['number'], 'head_sha': head,
+                            'state': ('target_qualification_required' if main_changed
+                                      else 'publication_qualification_required'), 'source_job': source['id'],
+                            'reasons': reasons,
+                            'reviewed_main_sha': source['main_sha'], 'current_main_sha': snapshot['main_sha']})
+                if (not event and not completed and not active and any(
+                        (j.get('state') == 'queued' and run_info(j).get('stopped')) or
+                        (j.get('state') in ('stale', 'interrupted', 'cancelled') and
+                         not any((j.get('result') or {}).get(key)
+                                 for key in ('reviewed_pr_evidence', 'evidence_record'))) for j in exact)):
+                    # Cancelled or invalidated unstarted work never inspected this head. Re-evaluate
+                    # its contribution against real prior analysis before dispatch.
+                    event = 'updated_prs'
+                    current[key]['pending'] = event
+                if active or (not context_update and not target_review_required and
+                              ((completed and not required) or (required and attempted))):
+                    if not (active and context_update):
+                        current[key]['pending'] = None
+                    if (required and attempted and pr['author'].lower() not in excluded and
+                            not any(item.get('number') == pr['number'] and item.get('state') in
+                                    ('target_qualification_required', 'publication_qualification_required')
+                                    for item in attention)):
                         attention.append({'number': pr['number'], 'head_sha': head,
                                           'state': attempted[-1].get('state'),
                                           'reasons': (attempted[-1].get('result') or {}).get(
@@ -159,11 +329,31 @@ class AutoReview:
                         continue
                 if (event and settings[event] and pr['author'].lower() not in excluded
                         and (not settings['non_draft_only'] or not pr.get('draft', True))):
+                    if prior and not target_review_required:
+                        decision = self.material_update(pr, prior, snapshot['main_sha'])
+                        if not decision['material']:
+                            current[key]['pending'] = None
+                            current[key]['context_pending'] = False
+                            attention.append({'number': pr['number'], 'head_sha': head,
+                                              'state': 'review_reused',
+                                              'reasons': [decision['reason']],
+                                              'source_job': decision['source_job']})
+                            continue
                     selected.append(pr['number'])
+            # Evidence collection can outlast a manual launch or a recovery.
+            # Recheck the ledger before dispatching from the older inventory.
+            assigned = {j['number'] for j in self.launcher.ledger.jobs()
+                        if j['repo'] == self.data['repo'] and j.get('state') in ('queued', 'running')
+                        and not j.get('stale') and not run_info(j).get('stopped')
+                        and j.get('main_sha') == snapshot['main_sha']
+                        and current.get(str(j['number']), {}).get('head') == j['head_sha']}
+            selected = [number for number in selected if number not in assigned]
             self.data.update(seen=current, initialized=True, last_poll=time.time(),
                              attention=attention, eligible=len(selected))
             self.save()
-            if selected and not any(p['running'] for p in self.launcher.status().values()):
+            # Queue new heads even while another batch is running or allowance-
+            # paused. Ledger.claim enforces the global worker cap across runs.
+            if selected:
                 non_draft_only = settings['non_draft_only']
                 preview = self.launcher.preview({'source': 'batch', 'prs': ' '.join(map(str, selected)),
                                                  'non_draft_only': non_draft_only,
@@ -183,6 +373,7 @@ class AutoReview:
                     raise ValueError(result['error'])
                 for number in selected:
                     current[str(number)]['pending'] = None
+                    current[str(number)]['context_pending'] = False
                 self.data['last_run'] = result['run_id']
                 self.data['eligible'] -= len(selected)
                 self.save()

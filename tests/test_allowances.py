@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from agentops.allowances import Allowances
+from agentops.allowances import Allowances, validate_settings
 from agentops.provider_usage import authentication_fingerprint
 from agentops.ledger import Ledger
 
@@ -196,6 +196,35 @@ class AllowanceTests(unittest.TestCase):
             release.set()
             self.assertTrue(future.result(3)['allowed'])
         self.assertEqual(self.calls, 1)
+
+    def test_token_budget_setting_is_validated(self):
+        validate_settings({'token_budget': 1000})
+        for bad in (0, -1, '1000', float('nan')):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_settings({'token_budget': bad})
+
+    def _finished_job(self, harness, usage, heartbeat=None):
+        snapshot = self.ledger.save_snapshot({'repo': 'a/b', 'complete': True, 'prs': []})
+        run = self.ledger.create_run(snapshot, {'harness': harness})
+        identity = self.ledger.enqueue(run, {'number': 1, 'head_sha': 'a' * 40}, 'b' * 40)
+        job = self.ledger.claim('owner', 1)
+        self.ledger.finish(identity, 'owner', 'reviewed',
+                           {'execution': {'harness': harness, 'usage': usage}})
+        if heartbeat is not None:
+            with self.ledger.connect(immediate=True) as db:
+                db.execute('UPDATE jobs SET heartbeat=? WHERE id=?', (heartbeat, identity))
+        return identity
+
+    def test_consumed_since_sums_only_this_provider_within_the_window(self):
+        self._finished_job('devin', {'input_tokens': 1000, 'output_tokens': 100})
+        self._finished_job('devin', {'input_tokens': 2000, 'output_tokens': 200})
+        self._finished_job('codex', {'input_tokens': 9999, 'output_tokens': 999})
+        self._finished_job('devin', {'input_tokens': 5, 'output_tokens': 5}, heartbeat=100)
+        self._finished_job('devin', {'input_tokens': 7})  # reused/partial usage rows tolerate gaps
+        limits = Allowances(self.ledger, {'harness': 'devin', 'auth_root': self.temp.name},
+                            reader=self.read, clock=lambda: self.now,
+                            identity_reader=lambda config: 'synthetic')
+        self.assertEqual(limits._consumed_since(200), 3307)
 
 
 if __name__ == '__main__':

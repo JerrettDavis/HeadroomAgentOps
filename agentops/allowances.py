@@ -14,7 +14,7 @@ REFRESH_LEASE_SECONDS = 60
 
 
 def validate_settings(settings):
-    if not isinstance(settings, dict) or set(settings) - {'enabled', 'stop_percent'}:
+    if not isinstance(settings, dict) or set(settings) - {'enabled', 'stop_percent', 'token_budget'}:
         raise ValueError('Unknown provider limit setting')
     if 'enabled' in settings and type(settings['enabled']) is not bool:
         raise ValueError('Limit enforcement must be true or false')
@@ -22,6 +22,10 @@ def validate_settings(settings):
         percent = settings['stop_percent']
         if type(percent) not in (int, float) or not math.isfinite(percent) or not 1 <= percent <= 100:
             raise ValueError('Stop point must be between 1 and 100 percent used')
+    if 'token_budget' in settings:
+        budget = settings['token_budget']
+        if type(budget) not in (int, float) or not math.isfinite(budget) or budget <= 0:
+            raise ValueError('Token budget must be a positive number of tokens')
 
 
 class Allowances:
@@ -133,6 +137,22 @@ class Allowances:
                 'blocked': value.get('blocked') is True, 'unlimited': unlimited,
                 'auth_fingerprint': value.get('auth_fingerprint')}
 
+    def _consumed_since(self, since):
+        """Locally measured billed tokens for this provider, for consumption budgets."""
+        total = 0
+        with self.ledger.connect() as db:
+            for (result,) in db.execute(
+                    'SELECT result FROM jobs WHERE heartbeat >= ? AND result IS NOT NULL', (since,)):
+                try:
+                    execution = (json.loads(result) or {}).get('execution') or {}
+                except ValueError:
+                    continue
+                if execution.get('harness') != self.provider:
+                    continue
+                usage = execution.get('usage') or {}
+                total += int(usage.get('input_tokens') or 0) + int(usage.get('output_tokens') or 0)
+        return total
+
     def check(self, refresh=True):
         """Refresh at most once per minute across coordinators, then apply current settings."""
         key, now = self.cache_key, self.clock()
@@ -155,7 +175,8 @@ class Allowances:
             cached.update(refreshing_until=now + REFRESH_LEASE_SECONDS, refresh_owner=lease)
             self._put(db, key, cached)
         try:
-            reading = self._normalize(self.reader(self.config))
+            reading = self._normalize(self.reader(
+                {**self.config, '_consumed_since': self._consumed_since}))
             if not reading['auth_fingerprint'] or reading['auth_fingerprint'] != current_identity:
                 raise ValueError('Allowance account changed during collection')
             if any(w['resets_at'] <= self.clock() for w in reading['windows']):

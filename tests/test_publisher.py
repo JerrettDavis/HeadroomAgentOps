@@ -1,11 +1,12 @@
 import tempfile
 import unittest
+import threading
 from unittest.mock import patch
 from pathlib import Path
 
 from agentops.ledger import Ledger
 from agentops.policy import gate, terminal_ci_refresh
-from agentops.publisher import Publisher
+from agentops.publisher import Publisher, publication_lock
 from agentops.github import RejectedWrite
 
 
@@ -132,6 +133,26 @@ class PolicyTests(unittest.TestCase):
 
 
 class PublisherTests(unittest.TestCase):
+    def test_concurrent_publisher_waits_for_owner_instead_of_failing_review(self):
+        started, acquired = threading.Event(), threading.Event()
+        errors = []
+        def contender():
+            started.set()
+            try:
+                with publication_lock(self.ledger.path):
+                    acquired.set()
+            except Exception as exc:
+                errors.append(exc)
+        with publication_lock(self.ledger.path):
+            thread = threading.Thread(target=contender)
+            thread.start()
+            self.assertTrue(started.wait(1))
+            self.assertFalse(acquired.wait(.1))
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(acquired.is_set())
+
     def test_ci_and_push_require_explicit_exact_source_review(self):
         for kind in ('ci', 'push'):
             calls = []
@@ -193,9 +214,26 @@ class PublisherTests(unittest.TestCase):
                 'require_decision':True,'determination_required':True,
                 'actions':[{'kind':'review','event':'COMMENT','body':'Still pending'}]}
         response=self.publisher.publish(self.job,pr(),review)
-        self.assertEqual(self.gh.posts,[])
+        self.assertEqual(self.gh.posts[0]['event'], 'COMMENT')
         self.assertTrue(response['held'])
         self.assertNotIn('decision',response)
+
+    def test_blocked_automatic_approval_publishes_scoped_observation_once(self):
+        self.gh.main = 'c' * 40
+        review = {**result(), 'require_decision': True,
+                  'determination_required': True,
+                  'actions': [{'kind': 'review', 'event': 'APPROVE', 'body': 'Tests passed; no defects found.'}]}
+        report = self.publisher.publish(self.job, pr(), review)
+        self.assertTrue(report['held'])
+        self.assertEqual(len(report['sent']), 1)
+        self.assertNotIn('decision', report)
+        self.assertIn(HEAD, self.gh.posts[0]['body'])
+        self.assertIn('Tests passed; no defects found.', self.gh.posts[0]['body'])
+        self.assertIn('upstream main changed', str(report['held']))
+        self.assertNotEqual(self.gh.posts[0].get('event'), 'APPROVE')
+        self.gh.current['discussion_hash'] = 'new author proof'
+        self.publisher.publish(self.job, pr(), review)
+        self.assertEqual(len(self.gh.posts), 1)
 
     def test_new_unreviewed_notice_blocks_publication_after_worker_completion(self):
         self.ledger.notice('o/r', 'learning', 'New relevant evidence', {'source': 'another worker'}, [1])

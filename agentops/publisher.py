@@ -3,6 +3,8 @@
 import contextlib
 import os
 import re
+import time
+import errno
 from pathlib import Path
 
 from .policy import gate, revision_gate
@@ -25,10 +27,17 @@ def publication_lock(path):
         stream.seek(0)
         if os.name == 'nt':
             import msvcrt
-            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            while True:
+                try:
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        raise
+                    time.sleep(.1)
         else:
             import fcntl
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(stream, fcntl.LOCK_EX)
         try:
             yield
         finally:
@@ -76,15 +85,12 @@ class Publisher:
             if entry not in report['own_discussion_entries']:
                 report['own_discussion_entries'].append(entry)
         actions = list(result.get('actions', []))
-        if result.get('require_decision'):
-            actions=[a for a in actions if not (a['kind']=='review' and a.get('event')=='COMMENT')]
         if result.get('determination_required') and not any(a['kind'] == 'review' for a in actions):
             live = prepared_current or read_pull(self.github,job['number'])
             actor = self.github.authenticated_user()['login']
             if not has_determination(live, result, actor):
                 proposed=determination(result, live['author'], actor)
-                if not result.get('require_decision') or proposed['event']!='COMMENT':
-                    actions.append(proposed)
+                actions.append(proposed)
         if result.get('require_decision') and not any(a['kind']=='review' and a.get('event') in
                                                     ('APPROVE','REQUEST_CHANGES') for a in actions):
             report['held'].append({'action':'final_review','reasons':['A qualified approval or concrete changes request is still required']})
@@ -194,6 +200,33 @@ class Publisher:
                 receipt = {'action': identity, 'reasons': list(dict.fromkeys(reasons))}
                 self.ledger.action_state(identity, 'held', receipt)
                 report['held'].append(receipt)
+                if (kind in ('comment', 'review') and current.get('state', 'open') == 'open'
+                        and (result.get('require_decision') or result.get('determination_required'))):
+                    # Publish the work without misrepresenting old evidence as a
+                    # current approval or a newly verified changes request.
+                    observation = {'kind': 'comment', 'body':
+                        f'Saved review of head `{job["head_sha"]}` against main `{job["main_sha"]}`.\n\n'
+                        'This records the completed analysis; it is not a current approval or '
+                        'a newly qualified changes request.\n\n' + action['body'] +
+                        '\n\nThe current revision, discussion and qualification must be rechecked '
+                        'before publishing a current review decision.'}
+                    observation_id = self.ledger.intent(job['id'], observation)
+                    observation_record = self.ledger.action(observation_id)
+                    observation_marker = f'<!-- headroom-agentops:{observation_id} -->'
+                    observed = (observation_record['receipt'] if observation_record['state'] == 'sent'
+                                else self._find_receipt(raw_current, observation_marker, observation, actor))
+                    if not observed and observation_record['state'] != 'sending':
+                        self.ledger.action_state(observation_id, 'sending')
+                        try:
+                            observed = self.github.request('POST',
+                                f'repos/{job["repo"]}/issues/{job["number"]}/comments',
+                                {'body': redact(observation['body']) + '\n\n' + observation_marker})
+                        except RejectedWrite as exc:
+                            self.ledger.action_state(observation_id, 'failed', {'reason': str(exc)})
+                    if observed:
+                        self.ledger.action_state(observation_id, 'sent', observed)
+                        report['sent'].append(observed)
+                        remember(observation, observation_id, observed)
                 continue
             before = None
             if kind == 'ci':
