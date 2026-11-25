@@ -151,6 +151,7 @@ test('help persists and tutorial navigates without launching jobs', async ({page
   const help = page.getByRole('checkbox', {name:'Show help'});
   await expect(help).toBeChecked();
   await page.screenshot({path:'../../.agentops/benchmark-help-desktop.png',fullPage:true});
+  await page.locator('form[data-action="inspect"] input[name="artifact"]').focus();
   await expect(page.locator('.benchmark-field-help').first()).toBeVisible();
   await help.uncheck();
   await expect(page.locator('.benchmark-field-help').first()).toBeHidden();
@@ -180,5 +181,54 @@ test('help persists and tutorial navigates without launching jobs', async ({page
   await guide.getByRole('button', {name:'Finish',exact:true}).click();
   expect(state.posts).toHaveLength(0);
   await help.check();
+  await page.locator('form[data-action="inspect"] input[name="artifact"]').focus();
   await expect(page.locator('.benchmark-field-help').first()).toBeVisible();
+});
+
+
+for (const width of [1280, 390]) {
+  test(`help never changes existing form geometry at ${width}px`, async ({page}) => {
+    await page.setViewportSize({width,height:900});
+    await fixture(page);
+    const toggle=page.getByRole('checkbox',{name:'Show help'});
+    await toggle.uncheck();
+    const geometry=()=>page.locator('#benchmark-view').evaluate(root=>
+      [...root.querySelectorAll('form, form label, form input, form select, form button')]
+        .filter(el=>el.getClientRects().length).map(el=>{
+          const r=el.getBoundingClientRect();return [r.x,r.y,r.width,r.height];
+        }));
+    const before=await geometry();
+    await toggle.check();
+    expect(await geometry()).toEqual(before);
+    const field=page.locator('form[data-action="inspect"] input[name="artifact"]');
+    await field.focus();
+    const hint=page.locator('.benchmark-field-help').first();
+    await expect(hint).toBeVisible();
+    expect(await geometry()).toEqual(before);
+    await page.screenshot({path:`../../.agentops/help-overlay-${width}.png`});
+    const bounds=await hint.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x+bounds.width).toBeLessThanOrEqual(width);
+    await page.keyboard.press('Escape');
+    await expect(hint).toBeHidden();
+    await toggle.uncheck();
+    expect(await geometry()).toEqual(before);
+  });
+}
+
+
+test('floating help stays open for focus or hover and dismisses on Escape', async ({page}) => {
+  await fixture(page);
+  const field=page.locator('form[data-action="inspect"] input[name="artifact"]');
+  const hint=page.locator('.benchmark-field-help').first();
+  await field.focus();
+  await page.mouse.move(1,1);
+  await page.waitForTimeout(250);
+  await expect(hint).toBeVisible();
+  await field.hover();
+  await page.getByRole('checkbox',{name:'Show help'}).focus();
+  await page.waitForTimeout(250);
+  await expect(hint).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(hint).toBeHidden();
 });

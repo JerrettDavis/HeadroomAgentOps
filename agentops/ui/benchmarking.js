@@ -40,20 +40,64 @@
   try { helpEnabled = localStorage.getItem('agentops.benchmark.help') !== 'off'; } catch {}
   const helpToggle = controls.querySelector('[data-help-toggle]');
   helpToggle.checked = helpEnabled;
+  let activeHelp = null;
+  let activeHelpField = null;
+  let helpDismissTimer;
+  function hideHelp() {
+    clearTimeout(helpDismissTimer);
+    if (activeHelp) activeHelp.hidePopover();
+    activeHelp = null;
+    activeHelpField = null;
+  }
+  function showHelp(input, hint) {
+    clearTimeout(helpDismissTimer);
+    if (!helpToggle.checked || !input.getClientRects().length) return;
+    if (activeHelp !== hint) { hideHelp(); hint.showPopover(); activeHelp = hint; }
+    activeHelpField = input.closest('.benchmark-field') || input.parentElement;
+    const anchor = input.getBoundingClientRect();
+    const box = hint.getBoundingClientRect();
+    const gap = 8;
+    const left = Math.max(gap, Math.min(anchor.left, window.innerWidth - box.width - gap));
+    const below = anchor.bottom + gap;
+    const top = below + box.height <= window.innerHeight - gap
+      ? below : Math.max(gap, anchor.top - box.height - gap);
+    hint.style.left = `${left}px`;
+    hint.style.top = `${top}px`;
+  }
+  function deferHideHelp() {
+    clearTimeout(helpDismissTimer);
+    helpDismissTimer = setTimeout(() => {
+      if (activeHelpField?.contains(document.activeElement) || activeHelpField?.matches(':hover') || activeHelp?.matches(':hover')) return;
+      hideHelp();
+    }, 150);
+  }
   root.querySelectorAll('input[name], select[name="transport"]').forEach((input, index) => {
     if (!helpCopy[input.name]) return;
-    const hint = document.createElement('small');
+    const hint = document.createElement('div');
     hint.id = `benchmark-help-${index}`;
     hint.className = 'benchmark-field-help';
+    hint.setAttribute('popover', 'manual');
+    hint.setAttribute('role', 'tooltip');
     hint.textContent = helpCopy[input.name];
-    hint.hidden = !helpEnabled;
     input.setAttribute('aria-describedby', hint.id);
-    (input.closest('.benchmark-field') || input.parentElement).append(hint);
+    // Keep help outside the form's flex/grid layout and overflow container.
+    document.body.append(hint);
+    const field = input.closest('.benchmark-field') || input.parentElement;
+    field.addEventListener('pointerenter', () => showHelp(input, hint));
+    field.addEventListener('pointerleave', deferHideHelp);
+    field.addEventListener('focusin', () => showHelp(input, hint));
+    field.addEventListener('focusout', event => { if (!field.contains(event.relatedTarget)) deferHideHelp(); });
+    hint.addEventListener('pointerenter', () => clearTimeout(helpDismissTimer));
+    hint.addEventListener('pointerleave', deferHideHelp);
   });
+  helpToggle.title = 'Show floating help when you hover or focus a field';
   helpToggle.addEventListener('change', () => {
-    root.querySelectorAll('.benchmark-field-help').forEach(hint => { hint.hidden = !helpToggle.checked; });
+    hideHelp();
     try { localStorage.setItem('agentops.benchmark.help', helpToggle.checked ? 'on' : 'off'); } catch {}
   });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') hideHelp(); });
+  document.addEventListener('scroll', hideHelp, true);
+  window.addEventListener('resize', hideHelp);
   const steps = [
     ['Prepare your comparison', 'Compare a candidate build with a baseline using the same requests. Have a candidate wheel (.whl), taskset JSON and policy JSON ready. Files must be accessible to the selected runner. Start with Local if the dependencies and provider credentials are configured on this machine.', 'inspect'],
     ['Inspect the candidate', 'Choose the candidate wheel and transport, then select Inspect candidate. Wait for its job to complete. Inspection produces the candidate details needed to create an experiment; it does not run the comparison.', 'inspect'],
@@ -74,7 +118,7 @@
     guide.querySelector('[data-guide-back]').disabled = guideStep === 0;
     guide.querySelector('[data-guide-next]').textContent = guideStep === steps.length - 1 ? 'Finish' : 'Next';
   }
-  controls.querySelector('[data-guide-open]').addEventListener('click', () => { guideStep = 0; renderGuide(); guide.showModal(); });
+  controls.querySelector('[data-guide-open]').addEventListener('click', () => { hideHelp(); guideStep = 0; renderGuide(); guide.showModal(); });
   guide.querySelector('[data-guide-close]').addEventListener('click', () => guide.close());
   guide.querySelector('[data-guide-back]').addEventListener('click', () => { if (guideStep > 0) guideStep--; renderGuide(); });
   guide.querySelector('[data-guide-next]').addEventListener('click', () => { if (guideStep === steps.length - 1) guide.close(); else { guideStep++; renderGuide(); } });

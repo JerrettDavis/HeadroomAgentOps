@@ -12,8 +12,8 @@
 
 .benchmark-help-controls, .benchmark-guide-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
 .benchmark-help-controls label { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
-.benchmark-field-help { display: block; max-width: 64ch; line-height: 1.5; opacity: .85; }
-.benchmark-field-help[hidden] { display: none; }
+.benchmark-field-help { position: fixed; inset: auto; margin: 0; box-sizing: border-box; width: max-content; max-width: min(38ch, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); box-shadow: 0 4px 16px rgba(0, 0, 0, .18); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.benchmark-field-help:not(:popover-open) { display: none; }
 .benchmark-guide { width: min(38rem, calc(100vw - 2rem)); max-height: 85vh; overflow: auto; padding: 1.5rem; border-radius: 12px; background: var(--panel, #172333); color: var(--text, #eef4fa); border: 1px solid #64748b; }
 .benchmark-guide::backdrop { background: rgba(0, 0, 0, .65); }
 .benchmark-guide p { max-width: 65ch; line-height: 1.6; }
