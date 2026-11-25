@@ -97,11 +97,11 @@ jobs:
             if (branch.protected) {
               const fresh = (await github.rest.pulls.get({owner, repo, pull_number})).data;
               if (fresh.head.sha !== ref || fresh.state !== 'open' || fresh.draft) continue;
-              await github.graphql(`mutation($id:ID!,$method:PullRequestMergeMethod!,$sha:GitObjectID!) {
-                enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$method,expectedHeadOid:$sha}) {
+              await github.graphql(`mutation($id:ID!,$mergeMethod:PullRequestMergeMethod!,$sha:GitObjectID!) {
+                enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$mergeMethod,expectedHeadOid:$sha}) {
                   pullRequest {number autoMergeRequest {enabledAt}}
                 }
-              }`, {id: pr.node_id, method: method.toUpperCase(), sha: ref});
+              }`, {id: pr.node_id, mergeMethod: method.toUpperCase(), sha: ref});
             } else {
               await github.rest.pulls.merge({owner, repo, pull_number, sha: ref, merge_method: method});
             }
