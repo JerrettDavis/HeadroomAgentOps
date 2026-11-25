@@ -9,3 +9,14 @@
 @media(max-width:600px){.benchmark-view{padding:16px}.benchmark-fields,.benchmark-dataset-forms{grid-template-columns:1fr}.benchmark-form{padding:16px}.benchmark-path{align-items:start;flex-direction:column}}
 .benchmark-field{min-width:0;display:flex;gap:8px;align-items:end}.benchmark-field>label{flex:1;min-width:0}.benchmark-field>button{flex-shrink:0}.benchmark-fields input[readonly]{background:var(--soft);cursor:default}.benchmark-picker{width:min(680px,calc(100vw - 32px));max-height:85vh;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:20px;background:var(--panel);color:var(--text)}.benchmark-picker::backdrop{background:#0008}.benchmark-picker h3{margin:0}.benchmark-picker-roots{display:flex;gap:8px;flex-wrap:wrap}.benchmark-picker-location{display:flex;gap:12px;align-items:center;margin:16px 0}.benchmark-picker-location code{overflow-wrap:anywhere;min-width:0}.benchmark-picker-entries{display:grid;gap:6px}.benchmark-picker-entries button{text-align:left;overflow-wrap:anywhere}.benchmark-picker [role=status]{overflow-wrap:anywhere}@media(max-width:600px){.benchmark-view{height:auto;min-height:calc(100vh - 150px)}.benchmark-picker-location{align-items:start;flex-direction:column}}
 .benchmark-view{width:100%;max-width:var(--shell,1800px);margin-inline:auto}.benchmark-workflow{align-items:start}.benchmark-field:has(small){flex-wrap:wrap}.benchmark-field small{flex-basis:100%;font-size:12px}
+
+.benchmark-help-controls, .benchmark-guide-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+.benchmark-help-controls label { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
+.benchmark-field-help { display: block; max-width: 64ch; line-height: 1.5; opacity: .85; }
+.benchmark-field-help[hidden] { display: none; }
+.benchmark-guide { width: min(38rem, calc(100vw - 2rem)); max-height: 85vh; overflow: auto; padding: 1.5rem; border-radius: 12px; background: var(--panel, #172333); color: var(--text, #eef4fa); border: 1px solid #64748b; }
+.benchmark-guide::backdrop { background: rgba(0, 0, 0, .65); }
+.benchmark-guide p { max-width: 65ch; line-height: 1.6; }
+.benchmark-guide h4 { font-size: 1.15rem; margin-bottom: .5rem; }
+.benchmark-guide-actions { margin-top: 1.5rem; justify-content: flex-end; }
+.benchmark-guide button:focus-visible, .benchmark-help-controls button:focus-visible { outline: 2px solid #69caff; outline-offset: 3px; }
