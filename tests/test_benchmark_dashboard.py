@@ -13,8 +13,10 @@ def service(tmp_path):
 
 def terminal(s, job):
     for _ in range(1200):
-        current = next(j for j in s.status()["jobs"] if j["id"] == job["id"])
-        if current["state"] not in ("queued", "running"):
+        # A concurrent atomic status-file replacement can briefly omit a row
+        # on Windows. Keep polling; absence is never terminal proof.
+        current = next((j for j in s.status()["jobs"] if j["id"] == job["id"]), None)
+        if current is not None and current["state"] not in ("queued", "running"):
             return current
         time.sleep(0.05)
     pytest.fail("supervisor did not finish")
