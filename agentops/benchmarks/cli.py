@@ -16,6 +16,10 @@ from .workspace import Workspace
 
 
 def load_json(path):
+    return load_json_text(Path(path).read_text("utf-8"))
+
+
+def load_json_text(text):
     def pairs(items):
         result = {}
         for key, value in items:
@@ -27,9 +31,7 @@ def load_json(path):
     def invalid(value):
         raise ValueError("nonfinite JSON number")
 
-    return json.loads(
-        Path(path).read_text("utf-8"), object_pairs_hook=pairs, parse_constant=invalid
-    )
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=invalid)
 
 
 def save_json(path, value):
@@ -151,6 +153,19 @@ def run_local(args):
 def parser():
     root = argparse.ArgumentParser(prog="headroom-benchmark", description=__doc__)
     commands = root.add_subparsers(dest="command", required=True)
+    export = commands.add_parser(
+        "export-dataset", help="export private task inputs for an OSS harness"
+    )
+    export.add_argument("tasks")
+    export.add_argument("--format", choices=("inspect", "aiperf"), required=True)
+    export.add_argument("--output", required=True)
+    imported = commands.add_parser(
+        "import-inspect", help="import literal-target text Inspect Sample JSONL"
+    )
+    imported.add_argument("dataset")
+    imported.add_argument("--taskset-id", required=True)
+    imported.add_argument("--revision", required=True)
+    imported.add_argument("--output", required=True)
     plan = commands.add_parser(
         "plan", help="validate and write a seeded paired schedule"
     )
@@ -237,6 +252,35 @@ def main(argv=None):
             signum = getattr(signal, name)
             previous[signum] = signal.signal(signum, cancel)
     try:
+        if args.command == "export-dataset":
+            from .interop import export_dataset
+
+            rows = export_dataset(load_json(args.tasks), args.format)
+            output = Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("x", encoding="utf-8") as stream:
+                for row in rows:
+                    stream.write(
+                        json.dumps(
+                            row, sort_keys=True, ensure_ascii=False, allow_nan=False
+                        )
+                        + "\n"
+                    )
+            return 0
+        if args.command == "import-inspect":
+            from .interop import import_inspect
+
+            # Reuse the strict JSON loader for duplicate keys and finite numbers.
+            records = Path(args.dataset).read_text("utf-8").splitlines()
+            rows = [load_json_text(line) for line in records if line.strip()]
+            data = import_inspect(rows, args.taskset_id, args.revision)
+            output = Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("x", encoding="utf-8") as stream:
+                stream.write(
+                    json.dumps(data, sort_keys=True, indent=2, allow_nan=False) + "\n"
+                )
+            return 0
         if args.command == "init":
             observed, taskset = load_json(args.inspection), load_json(args.tasks)
             if set(taskset) != {"taskset_id", "revision", "tasks"}:

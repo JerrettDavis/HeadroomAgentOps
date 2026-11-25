@@ -1,5 +1,8 @@
 # Paired release benchmarks
 
+See [OSS interoperability](benchmark-ecosystem.md) for tested Inspect AI and
+AIPerf integrations, companion harnesses and emerging MLPerf Endpoints guidance.
+
 `headroom-benchmark` runs independently of the AgentOps review panel and workers.
 It implements Headroom ADRs [0003](https://github.com/headroomlabs-ai/headroom/blob/234c233cc439aedba53b242f02f695de5f90c877/docs/adr/0003-a1-b-release-benchmark.md)
 and [0004](https://github.com/headroomlabs-ai/headroom/blob/234c233cc439aedba53b242f02f695de5f90c877/docs/adr/0004-black-box-release-benchmarks.md):
