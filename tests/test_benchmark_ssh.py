@@ -100,7 +100,11 @@ def test_ssh_staging_execution_and_collection_use_same_run(tmp_path, monkeypatch
             )
             if ready.returncode == 0:
                 break
-            assert time.monotonic() < deadline, ready.stderr
+            if time.monotonic() >= deadline:
+                server_log = subprocess.run(
+                    ["docker", "logs", container], capture_output=True, text=True
+                )
+                pytest.fail(ready.stderr + server_log.stdout + server_log.stderr)
             time.sleep(0.2)
         inspection_dir = tmp_path / "inspection"
         assert (
