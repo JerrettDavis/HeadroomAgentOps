@@ -21,4 +21,4 @@ headroom-benchmark = "agentops.benchmarks.cli:main"
 include = ["agentops*"]
 
 [tool.setuptools.package-data]
-agentops = ["panel.html", "tray.ps1", "brand/*.svg", "brand/*.ico", "brand/*.png", "ui/*.js", "ui/*.txt", "ui/*.md", "benchmarks/contracts/*.json", "benchmarks/contracts/LICENSE", "benchmarks/contracts/SOURCE.md"]
+agentops = ["panel.html", "tray.ps1", "brand/*.svg", "brand/*.ico", "brand/*.png", "ui/*.js", "ui/*.css", "ui/*.txt", "ui/*.md", "benchmarks/contracts/*.json", "benchmarks/contracts/LICENSE", "benchmarks/contracts/SOURCE.md"]

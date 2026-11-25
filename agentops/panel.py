@@ -323,11 +323,13 @@ def archived_diff(root, identity, expected_head, repository):
 
 
 def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=None, usage_identity_reader=None,
-                priority_monitor=None, stack_service=None):
+                priority_monitor=None, stack_service=None, benchmark_service=None):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise ValueError('The panel binds to loopback only')
     page = Path(__file__).with_name('panel.html')
     assets = {
+        '/ui/benchmarking.js': (page.parent / 'ui' / 'benchmarking.js', 'text/javascript; charset=utf-8'),
+        '/ui/benchmarking.css': (page.parent / 'ui' / 'benchmarking.css', 'text/css; charset=utf-8'),
         '/ui/marked.js': (page.parent / 'ui' / 'marked.js', 'text/javascript; charset=utf-8'),
         '/ui/purify.js': (page.parent / 'ui' / 'purify.js', 'text/javascript; charset=utf-8'),
         '/ui/markdown.js': (page.parent / 'ui' / 'markdown.js', 'text/javascript; charset=utf-8'),
@@ -351,6 +353,14 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
     stack_holder = [stack_service]
     import threading
     stack_lock = threading.Lock()
+    benchmark_holder = [benchmark_service]
+    benchmark_lock = threading.Lock()
+    def benchmarks():
+        from .benchmark_service import BenchmarkService
+        with benchmark_lock:
+            if benchmark_holder[0] is None:
+                benchmark_holder[0] = BenchmarkService(path)
+            return benchmark_holder[0]
     def stacks():
         with stack_lock:
             if stack_holder[0] is None:
@@ -397,6 +407,10 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                     result = stacks().publish(payload)
                 elif self.path == '/api/stacks/refresh':
                     result = stacks().refresh(payload)
+                elif self.path == '/api/benchmarks':
+                    result = benchmarks().submit(payload)
+                elif self.path == '/api/benchmarks/cancel':
+                    result = benchmarks().cancel(payload)
                 else:
                     self.send_error(404)
                     return
@@ -404,7 +418,9 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
             except (ValueError, TypeError, KeyError) as error:
                 status, result = 400, {'error': str(error)}
             except Exception:
-                status, result = 503, {'error': ('Stack operation unavailable. Refresh saved stack status before retrying.'
+                status, result = 503, {'error': ('Benchmark operation unavailable. Refresh saved run status before retrying.'
+                                               if self.path.startswith('/api/benchmarks') else
+                                               'Stack operation unavailable. Refresh saved stack status before retrying.'
                                                 if self.path.startswith('/api/stacks/') else
                                                 'Review launch unavailable. Check GitHub authentication and the panel configuration, then preview again.')}
             body = redact(json.dumps(result)).encode()
@@ -440,6 +456,21 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                                    'processes': launcher.status()}).encode()
             elif url.path == '/api/merge-priority':
                 body = redact(json.dumps(priority.status(), ensure_ascii=False)).encode()
+            elif url.path == '/api/benchmarks':
+                try:
+                    body = redact(json.dumps(benchmarks().status(), ensure_ascii=False, allow_nan=False)).encode()
+                except (ValueError, OSError):
+                    status, body = 503, b'{"error":"Benchmark status unavailable. Saved evidence is retained."}'
+            elif url.path == '/api/benchmark-files':
+                if not secrets.compare_digest(self.headers.get('X-Launch-Token', ''), token):
+                    status, body = 403, b'{"error":"Dashboard token required for file browsing."}'
+                else:
+                    from .benchmark_files import list_files
+                    try:
+                        query = parse_qs(url.query)
+                        body = json.dumps(list_files(query.get('path', [''])[0], query.get('kind', ['json'])[0]), ensure_ascii=False).encode()
+                    except ValueError:
+                        status, body = 400, b'{"error":"Directory unavailable. Choose another location."}'
             elif url.path == '/api/stacks':
                 result = stack_holder[0].status() if stack_holder[0] else StackService.peek(path, launcher.config)
                 body = redact(json.dumps(result, ensure_ascii=False)).encode()
@@ -470,7 +501,7 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' https:; frame-ancestors 'none'; base-uri 'none'")
+            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; frame-ancestors 'none'; base-uri 'none'")
             self.end_headers()
             self.wfile.write(body)
 
