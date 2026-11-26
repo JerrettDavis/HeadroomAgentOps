@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "dependencies": {
     "@openai/codex": "0.171.0",
-    "@anthropic-ai/claude-code": "2.1.326",
+    "@anthropic-ai/claude-code": "2.1.331",
     "@github/copilot": "1.0.114"
   }
 }
