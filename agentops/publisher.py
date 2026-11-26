@@ -86,9 +86,16 @@ class Publisher:
                 report['own_discussion_entries'].append(entry)
         actions = list(result.get('actions', []))
         findings = result.get('findings', [])
+        normalize = lambda value: re.sub(r'\s+', ' ', redact(value)).strip().lower()
+        public_body = lambda value: normalize(re.sub(r'<!--\s*headroom-agentops:[^>]*-->', '', value))
+        known_bodies = set()
+        if actions or findings or result.get('determination_required'):
+            live = prepared_current or read_pull(self.github, job['number'])
+            known_bodies = {public_body(item.get('body') or '')
+                            for field in ('comments', 'reviews', 'review_comments')
+                            for item in live.get(field, [])}
         if findings:
             live = prepared_current or read_pull(self.github, job['number'])
-            normalize = lambda value: re.sub(r'\s+', ' ', redact(value)).strip().lower()
             known = normalize('\n'.join(item.get('body') or ''
                                        for field in ('comments', 'reviews', 'review_comments')
                                        for item in live.get(field, [])))
@@ -115,6 +122,11 @@ class Publisher:
                     pass  # Filtering old findings cannot qualify a new approval.
                 elif proposed.get('event') != 'COMMENT' or determination_result.get('findings'):
                     actions.append(proposed)
+        actions = [action for action in actions
+                   if action['kind'] not in ('comment', 'review')
+                   or action.get('event') == 'APPROVE'
+                   or public_body(action.get('body', '')) not in known_bodies
+                   or self.ledger.action(self.ledger.intent(job['id'], action))['state'] in ('sent', 'sending')]
         if result.get('require_decision') and not any(a['kind']=='review' and a.get('event') in
                                                     ('APPROVE','REQUEST_CHANGES') for a in actions):
             report['held'].append({'action':'final_review','reasons':['A qualified approval or concrete changes request is still required']})

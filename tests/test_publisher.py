@@ -255,6 +255,19 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(len(self.gh.posts), 1)
         self.assertIn(body, self.gh.posts[0]['body'])
 
+    def test_required_decision_does_not_repeat_existing_wrapped_finding(self):
+        body = 'Existing blocker remains: Already recorded blocker.'
+        self.gh.current['comments'] = [{'body': body + '\n\n<!-- headroom-agentops:prior-action -->'}]
+        finding = {'severity': 'important', 'path': 'a.py', 'line': 5,
+                   'description': 'Already recorded blocker.', 'novel': False,
+                   'evidence': 'Unchanged evidence.'}
+        review = {**result(), 'outcome': 'held', 'require_decision': True,
+                  'determination_required': True, 'findings': [finding],
+                  'actions': [{'kind': 'review', 'event': 'REQUEST_CHANGES', 'body': body}]}
+        response = self.publisher.publish(self.job, pr(), review)
+        self.assertEqual(self.gh.posts, [])
+        self.assertTrue(response['held'])
+
     def test_new_unreviewed_notice_blocks_publication_after_worker_completion(self):
         self.ledger.notice('o/r', 'learning', 'New relevant evidence', {'source': 'another worker'}, [1])
         review = {**result(), 'reviewed_notice_ids': [],
@@ -351,8 +364,9 @@ class PublisherTests(unittest.TestCase):
         self.gh.current['comments'].append({'id': 500, 'user': {'login': 'contributor'},
             'body': action['body'] + '\n\n<!-- headroom-agentops:' + identity + ' -->'})
         response = self.publisher.publish(self.job, pr(), {**result(), 'actions': [action]})
-        self.assertEqual(len(self.gh.posts), 1)
-        self.assertNotEqual(response['sent'][0]['id'], 500)
+        self.assertEqual(self.gh.posts, [])
+        self.assertEqual(response['sent'], [])
+        self.assertNotEqual(self.ledger.action(identity)['state'], 'sent')
 
     def test_an_issue_comment_is_not_a_receipt_for_an_approval_review(self):
         action = {'kind': 'review', 'event': 'APPROVE', 'body': 'Qualified.'}
