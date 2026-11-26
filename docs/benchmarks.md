@@ -253,3 +253,45 @@ testing. Set `HEADROOM_BENCH_CANDIDATE_WHEEL` to an actual compatible Headroom w
 to run the optional real-proxy/local-provider wire test; it remains simulator
 evidence. CI runs native tests across supported Python/OS versions and both real
 transport tests on Linux.
+# Visual Benchmark Studio
+
+Open **Benchmarking** in the local AgentOps panel and choose **Run a demo now**
+for an offline introduction. Bundled templates cover a first paired comparison,
+different context sizes, and model-profile comparisons. They require no input
+files, provider credentials, or charges.
+
+Templates can be edited through Name, Shape, and Review. Choose scenarios,
+simulated features and model profiles, then review the complete cell matrix and
+request count. Wizard navigation saves a validated draft; **Save draft** also
+persists it explicitly. **Continue saved draft** restores it after a reload.
+
+Runs use the durable benchmark subprocess supervisor. Saved results include
+baseline/candidate token bars, per-scenario tables, latency, pair counts, pinned
+configuration and an evidence export. Every example remains marked as a
+simulator; a simulated policy pass never grants live qualification.
+
+**Find commit and build sources** searches GitHub commits by SHA prefix,
+message, `author:login`, or `#123` for PR commits. Switch to Pull requests to
+search PR titles. Selecting a full SHA lists matching GitHub Actions artifacts,
+including expiry and build-run provenance. Searches are repository-scoped,
+cached for 60 seconds, and paginated in pages of 20 (up to 20 pages). Artifact
+pages scan repository artifacts and clearly distinguish an empty page from a
+complete search. Discovery does not download or execute code.
+
+Choose **Fetch** on an available artifact to download and verify its single wheel.
+Choose **Build this commit in Docker** to check out the exact commit and build a
+wheel in a container limited to 2 CPUs and 4 GiB memory. The builder image is
+resolved to an immutable image ID, and the source, recipe and wheel digests are
+retained. **Reuse a wheel or build in Docker** checks up to 20 successful build
+runs; ambiguous or incomplete searches require an explicit selection.
+
+Prepared-source jobs show their current stage and survive panel reloads. **Use
+prepared wheel** rechecks its provenance and bytes, then fills candidate
+inspection and the full SHA automatically. Select a runner compatible with the
+wheel's platform tag before inspecting it. Fetching and building do not run
+model requests; inspecting and measuring remain separate explicit actions.
+
+This is the first implementation stage of the approved Studio design. Measured
+candidate runs still use the existing file-based workflow described above. The
+measured tool adapters, two-build comparisons, the measured visual designer and
+grouped execution remain under development.

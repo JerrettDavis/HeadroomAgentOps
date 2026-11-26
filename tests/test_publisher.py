@@ -200,14 +200,13 @@ class PublisherTests(unittest.TestCase):
         self.assertTrue(any('Dependabot' in reason for held in response['held']
                             for reason in held['reasons']))
 
-    def test_completed_review_gets_public_determination_even_without_findings(self):
+    def test_internal_qualification_hold_does_not_post_empty_determination(self):
         review = {**result(), 'outcome': 'held', 'publication_qualification': 'held',
                   'qualification_limits': ['Local runtime qualification missing'],
                   'determination_required': True}
         response = self.publisher.publish(self.job, pr(), review)
-        self.assertEqual(self.gh.posts[0]['event'], 'COMMENT')
-        self.assertIn('Local runtime qualification missing', self.gh.posts[0]['body'])
-        self.assertEqual(len(response['sent']), 1)
+        self.assertEqual(self.gh.posts, [])
+        self.assertEqual(response['sent'], [])
 
     def test_required_decision_does_not_complete_with_another_comment(self):
         review={**result(),'outcome':'held','publication_qualification':'held',
@@ -218,22 +217,56 @@ class PublisherTests(unittest.TestCase):
         self.assertTrue(response['held'])
         self.assertNotIn('decision',response)
 
-    def test_blocked_automatic_approval_publishes_scoped_observation_once(self):
+    def test_blocked_automatic_approval_stays_internal(self):
         self.gh.main = 'c' * 40
         review = {**result(), 'require_decision': True,
                   'determination_required': True,
                   'actions': [{'kind': 'review', 'event': 'APPROVE', 'body': 'Tests passed; no defects found.'}]}
         report = self.publisher.publish(self.job, pr(), review)
         self.assertTrue(report['held'])
-        self.assertEqual(len(report['sent']), 1)
+        self.assertEqual(report['sent'], [])
         self.assertNotIn('decision', report)
-        self.assertIn(HEAD, self.gh.posts[0]['body'])
-        self.assertIn('Tests passed; no defects found.', self.gh.posts[0]['body'])
         self.assertIn('upstream main changed', str(report['held']))
-        self.assertNotEqual(self.gh.posts[0].get('event'), 'APPROVE')
         self.gh.current['discussion_hash'] = 'new author proof'
         self.publisher.publish(self.job, pr(), review)
+        self.assertEqual(self.gh.posts, [])
+
+    def test_required_decision_does_not_repeat_known_findings(self):
+        finding = {'severity': 'important', 'path': 'a.py', 'line': 5,
+                   'description': 'Already recorded blocker.', 'evidence': 'Unchanged evidence.'}
+        self.gh.current['comments'] = [{'body': finding['description']}]
+        review = {**result(), 'outcome': 'held', 'require_decision': True,
+                  'determination_required': True, 'findings': [finding],
+                  'actions': [{'kind': 'review', 'event': 'REQUEST_CHANGES',
+                               'body': 'Already recorded blocker.'}]}
+        response = self.publisher.publish(self.job, pr(), review)
+        self.assertEqual(self.gh.posts, [])
+        self.assertTrue(response['held'])
+
+    def test_substantive_update_can_reference_a_known_finding(self):
+        finding = {'severity': 'important', 'path': 'a.py', 'line': 5,
+                   'description': 'Already recorded blocker.', 'novel': False,
+                   'evidence': 'Unchanged evidence.'}
+        self.gh.current['comments'] = [{'body': finding['description']}]
+        body = 'Already recorded blocker. New reproduction: the saved review loses its archive after restart.'
+        review = {**result(), 'outcome': 'held', 'findings': [finding],
+                  'actions': [{'kind': 'review', 'event': 'COMMENT', 'body': body}]}
+        self.publisher.publish(self.job, pr(), review)
         self.assertEqual(len(self.gh.posts), 1)
+        self.assertIn(body, self.gh.posts[0]['body'])
+
+    def test_required_decision_does_not_repeat_existing_wrapped_finding(self):
+        body = 'Existing blocker remains: Already recorded blocker.'
+        self.gh.current['comments'] = [{'body': body + '\n\n<!-- headroom-agentops:prior-action -->'}]
+        finding = {'severity': 'important', 'path': 'a.py', 'line': 5,
+                   'description': 'Already recorded blocker.', 'novel': False,
+                   'evidence': 'Unchanged evidence.'}
+        review = {**result(), 'outcome': 'held', 'require_decision': True,
+                  'determination_required': True, 'findings': [finding],
+                  'actions': [{'kind': 'review', 'event': 'REQUEST_CHANGES', 'body': body}]}
+        response = self.publisher.publish(self.job, pr(), review)
+        self.assertEqual(self.gh.posts, [])
+        self.assertTrue(response['held'])
 
     def test_new_unreviewed_notice_blocks_publication_after_worker_completion(self):
         self.ledger.notice('o/r', 'learning', 'New relevant evidence', {'source': 'another worker'}, [1])
@@ -331,8 +364,9 @@ class PublisherTests(unittest.TestCase):
         self.gh.current['comments'].append({'id': 500, 'user': {'login': 'contributor'},
             'body': action['body'] + '\n\n<!-- headroom-agentops:' + identity + ' -->'})
         response = self.publisher.publish(self.job, pr(), {**result(), 'actions': [action]})
-        self.assertEqual(len(self.gh.posts), 1)
-        self.assertNotEqual(response['sent'][0]['id'], 500)
+        self.assertEqual(self.gh.posts, [])
+        self.assertEqual(response['sent'], [])
+        self.assertNotEqual(self.ledger.action(identity)['state'], 'sent')
 
     def test_an_issue_comment_is_not_a_receipt_for_an_approval_review(self):
         action = {'kind': 'review', 'event': 'APPROVE', 'body': 'Qualified.'}

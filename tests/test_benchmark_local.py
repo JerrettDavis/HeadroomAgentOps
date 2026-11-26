@@ -6,6 +6,28 @@ import pytest
 from agentops.benchmarks.local import proxy_command, proxy_environment, verify_artifact
 
 
+def test_selected_provider_binding_overrides_ambient_backend_without_changing_legacy_configs():
+    from agentops.benchmarks.local import proxy_environment
+    inherited={'HEADROOM_BACKEND':'bedrock','ANTHROPIC_API_KEY':'private'}
+    assert proxy_environment({'provider_binding':'anthropic'},inherited)['HEADROOM_BACKEND']=='anthropic'
+    assert proxy_environment({},inherited)['HEADROOM_BACKEND']=='bedrock'
+
+
+@pytest.mark.parametrize('ambient',['bedrock','anyllm'])
+@pytest.mark.parametrize('binding,expected',[('openai','anthropic'),('azure','anthropic'),('anthropic','anthropic'),('bedrock','bedrock')])
+def test_measured_binding_overrides_ambient_and_configured_translation(ambient,binding,expected):
+    observed=proxy_environment({'provider_binding':binding,'proxy_args':['--backend','bedrock']},
+        {'HEADROOM_BACKEND':ambient,'OPENAI_TARGET_API_URL':'https://selected.example/v1'})
+    assert observed['HEADROOM_BACKEND']==expected
+    assert observed['OPENAI_TARGET_API_URL']=='https://selected.example/v1'
+
+
+def test_azure_resource_endpoint_binds_supported_v1_compatible_target():
+    from agentops.benchmarks.local import proxy_environment
+    observed=proxy_environment({'provider_binding':'azure'},{'AZURE_OPENAI_ENDPOINT':'https://resource.openai.azure.com/'})
+    assert observed['OPENAI_TARGET_API_URL']=='https://resource.openai.azure.com/openai'
+
+
 def test_artifact_digest_is_verified_before_any_install(tmp_path):
     artifact = tmp_path / "candidate.whl"
     artifact.write_bytes(b"candidate")

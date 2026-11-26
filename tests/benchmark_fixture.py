@@ -37,8 +37,10 @@ class Handler(BaseHTTPRequestHandler):
             Path('request-started').write_text(str(os.getpid()))
             time.sleep(args.fixture_delay)
         tokens = 70 if enabled else 100
-        self.respond({'model': body['model'], 'choices': [{'message': {'content': 'hello'}}],
-                      'usage': {'prompt_tokens': tokens}})
+        self.respond({'id': 'chatcmpl-studio-fixture', 'object': 'chat.completion', 'created': 0,
+                      'model': body['model'], 'choices': [{'index': 0,
+                      'message': {'role': 'assistant', 'content': 'hello'}, 'finish_reason': 'stop'}],
+                      'usage': {'prompt_tokens': tokens, 'completion_tokens': 1, 'total_tokens': tokens + 1}})
 HTTPServer((args.host, args.port), Handler).serve_forever()
 """
 

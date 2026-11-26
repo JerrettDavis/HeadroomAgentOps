@@ -92,7 +92,28 @@ with tempfile.TemporaryDirectory(prefix='agentops-ui-') as directory:
             return dict(repo='example/repository', default_branch='main', fresh=True,
                         observed_at=time.time(), refreshing=False, error=None, refresh_seconds=60,
                         prs=rank_prs('example/repository', rows))
+    # A real offline candidate source lets Studio browser tests exercise the
+    # measured supervisor/runner path without provider credentials or charges.
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+    from benchmark_fixture import build_fixture
+    from agentops.benchmark_service import BenchmarkService, _write
+    from agentops.benchmarks.core import digest
+    benchmark_service=BenchmarkService(path)
+    source_id='f'*32
+    source_directory=benchmark_service.root/source_id
+    wheel_directory=source_directory/'wheel'
+    wheel_directory.mkdir(parents=True)
+    wheel,wheel_digest=build_fixture(wheel_directory)
+    source={'kind':'artifact','repository':'fixture/studio','sha':'f'*40,'artifact_id':1}
+    argv,paths=benchmark_service._argv({'action':'source','source':source},source_directory)
+    record={'schema_version':1,'request':source,'resolved':source,'provenance':{'strategy':'offline-fixture'},
+            'wheel':'wheel/'+wheel.name,'sha256':wheel_digest}
+    _write(source_directory/'source.json',record)
+    (source_directory/'source.sha256').write_text(digest(record),encoding='utf-8')
+    _write(source_directory/'job.json',{'id':source_id,'label':'Offline measured fixture','action':'source',
+        'state':'completed','created_at':time.time()-1,'exit_code':0,'argv':argv,'paths':paths})
     with make_server(path, port=args.port, config=config, usage_reader=synthetic_usage,
+                     benchmark_service=benchmark_service,
                      priority_monitor=SyntheticPriority(),
                      usage_identity_reader=lambda config: 'synthetic') as server:
         server.serve_forever()

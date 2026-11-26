@@ -1,10 +1,21 @@
 """Transport-independent orchestration and immutable terminal evidence."""
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .core import ARMS, digest, evaluate, finite_number, schedule, validate_manifest
+
+
+def public_tool_metrics(value):
+    """Keep runtime identity and request count, excluding private native log paths."""
+    if (not isinstance(value, dict) or value.get("tool") not in {"inspect", "aiperf"}
+            or not isinstance(value.get("version"), str) or not re.fullmatch(r"\d+(?:\.\d+){1,3}", value["version"])
+            or type(value.get("requests")) is not int or value["requests"] != 1
+            or value.get("latency_basis") != "proxy_roundtrip_nonstreaming"):
+        raise ValueError("Unverified external harness telemetry")
+    return {key: value[key] for key in ("tool", "version", "requests", "latency_basis")}
 
 
 def expected_identity(experiment):
@@ -48,6 +59,8 @@ def run_experiment(experiment, adapter):
                 ):
                     if key in observed:
                         row[key] = observed[key]
+                if "tool_metrics" in observed:
+                    row["tool_metrics"] = public_tool_metrics(observed["tool_metrics"])
                 identity = row.get("identity", {})
                 for key, value in expected.items():
                     if digest(identity.get(key)) != digest(value):

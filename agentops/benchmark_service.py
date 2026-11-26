@@ -20,6 +20,8 @@ _ROOT = Path(__file__).resolve().parents[1]
 _TERMINAL = {"completed", "failed", "recoverable", "cancelled", "interrupted"}
 _PUBLIC = (
     "id",
+    "label",
+    "client_request_id",
     "action",
     "state",
     "created_at",
@@ -31,6 +33,10 @@ _PUBLIC = (
 )
 _THREAD_LOCK = threading.RLock()
 _FIELDS = {
+    "tool": {"tool", "runner", "recover"},
+    "group": {"design", "recover", "client_request_id"},
+    "source": {"source"},
+    "demo": {"design"},
     "inspect": {
         "artifact",
         "config",
@@ -56,6 +62,8 @@ _FIELDS = {
         "repeats",
     },
     "run": {
+        "baseline_artifact",
+        "baseline_config",
         "artifact",
         "manifest",
         "experiment_id",
@@ -274,7 +282,84 @@ class BenchmarkService:
             raise ValueError("Referenced job is unavailable")
         return matches[0]
 
+    @staticmethod
+    def _group_intent(payload):
+        from .benchmarks.core import digest
+        keys=set(payload)-{"client_request_id"}
+        if keys not in ({"action", "design"}, {"action", "recover"}):
+            raise ValueError("A measured group requires only its experiment design or recovery selection")
+        identity=payload.get("client_request_id")
+        if identity is None:
+            return None,None
+        if not isinstance(identity,str) or not re.fullmatch("[a-f0-9]{32}",identity):
+            raise ValueError("Invalid group submission identifier")
+        return identity,digest({key:value for key,value in payload.items() if key!="client_request_id"})
+
     def _argv(self, payload, directory):
+        if isinstance(payload, dict) and payload.get("action") == "tool":
+            if set(payload)=={"action", "tool", "runner"}:
+                from .benchmark_experiments import validate
+                from .benchmarks.tools import PINS
+                if not isinstance(payload["tool"],str) or payload["tool"] not in PINS:
+                    raise ValueError("Choose a supported tool runtime")
+                spec={"tool":payload["tool"],"runner":validate({"runner":payload["runner"]})["runner"]}
+                if spec["runner"]["transport"]=="ssh":
+                    def scope(runner):
+                        return (runner.get("transport","local"),runner.get("host"),runner.get("ssh_port",22),runner.get("ssh_config") or None)
+                    observed=set()
+                    for old in self._jobs():
+                        if old["action"]!="tool":
+                            continue
+                        prior_dir=self.root/old["id"]
+                        try:
+                            receipt=json.loads((prior_dir/"tool-setup-receipt.json").read_text("utf-8"))
+                            if receipt.get("tool")!=spec["tool"] or scope(receipt.get("runner",{}))!=scope(spec["runner"]):
+                                continue
+                            handle=receipt["remote_path"]
+                            if handle in observed:
+                                continue
+                            observed.add(handle)
+                            saved=json.loads((prior_dir/"tool-setup.json").read_text("utf-8")) if (prior_dir/"tool-setup.json").is_file() else {}
+                            if saved.get("available") is True or saved.get("status") in {"completed","failed"}:
+                                continue
+                        except (OSError,ValueError,KeyError,TypeError,AttributeError):
+                            continue
+                        raise ValueError("An existing remote tool setup is unresolved. Collect its saved receipt before starting another installation.")
+            elif set(payload)=={"action", "recover"}:
+                prior=self._prior(payload["recover"],"tool")
+                if prior["state"] not in _TERMINAL:
+                    raise ValueError("Tool preparation is still supervised; follow its existing job")
+                receipt=self.root/prior["id"]/"tool-setup-receipt.json"
+                if not receipt.is_file() or receipt.is_symlink():
+                    raise ValueError("No owned remote setup receipt is available")
+                spec={"recover":str(receipt)}
+            else:
+                raise ValueError("Tool preparation requires a tool and runner, or an existing setup receipt")
+            return (["prepare-tool", "--setup", json.dumps(spec), "--root", str(self.root/".tools"),
+                     "--output", str(directory)],
+                    {"tool":str(directory/"tool-setup.json"),"inspection":None,"manifest":None,"result":None,"dataset":None})
+        if isinstance(payload, dict) and payload.get("action") == "group":
+            from .benchmark_groups import freeze, prepare_recovery
+            self._group_intent(payload)
+            plan = freeze(payload["design"], self) if "design" in payload else prepare_recovery(payload["recover"], self)
+            return (["group", "--plan", json.dumps(plan), "--output", str(directory)],
+                    {"group": str(directory / "group-state.json"), "inspection": None,
+                     "manifest": str(directory / "group-manifest.json"), "result": None, "dataset": None})
+        if isinstance(payload, dict) and payload.get("action") == "source":
+            from .benchmark_resolver import validate_source
+            if set(payload) != {"action", "source"}:
+                raise ValueError("Source preparation requires only a source selection")
+            source = validate_source(payload["source"])
+            return (["resolve-source", "--source", json.dumps(source), "--output", str(directory)],
+                    {"source": str(directory / "source.json"), "inspection": None,
+                     "manifest": None, "result": None, "dataset": None})
+        if isinstance(payload, dict) and payload.get("action") == "demo":
+            from .benchmark_studio import validate_design
+            if set(payload) != {"action", "design"}:
+                raise ValueError("Demo requires only an experiment design")
+            design = validate_design(payload["design"])
+            return (["demo", "--design", json.dumps(design), "--output", str(directory)],
+                    {"inspection": None, "manifest": None, "result": None, "dataset": None})
         if not isinstance(payload, dict) or payload.get("action") not in _FIELDS:
             raise ValueError("Unknown benchmark action")
         action = payload["action"]
@@ -335,7 +420,7 @@ class BenchmarkService:
         paths = {"inspection": None, "manifest": None, "result": None, "dataset": None}
         if action in {"inspect", "run"}:
             file("artifact")
-            for key in ("config", "ssh_config"):
+            for key in ("config", "ssh_config", "baseline_artifact", "baseline_config"):
                 if key in data:
                     file(key)
             if data.get("transport", "local") not in {"local", "docker", "ssh"}:
@@ -367,6 +452,8 @@ class BenchmarkService:
             argv += options(
                 (
                     "artifact",
+                    "baseline_artifact",
+                    "baseline_config",
                     "config",
                     "sha256",
                     "transport",
@@ -452,6 +539,15 @@ class BenchmarkService:
             return self._submit(payload)
 
     def _submit(self, payload):
+        request_id=request_digest=None
+        if isinstance(payload,dict) and payload.get("action")=="group":
+            request_id,request_digest=self._group_intent(payload)
+            if request_id:
+                previous=next((j for j in self._jobs() if j.get("client_request_id")==request_id),None)
+                if previous:
+                    if previous.get("request_digest")!=request_digest:
+                        raise ValueError("Submission identifier belongs to a different experiment intention")
+                    return self._public(previous)
         identifier = uuid.uuid4().hex
         directory = self.root / identifier
         argv, paths = self._argv(payload, directory)
@@ -488,6 +584,26 @@ class BenchmarkService:
             "argv": argv,
             "started_epoch": time.time(),
         }
+        if request_id:
+            job.update(client_request_id=request_id,request_digest=request_digest)
+        if payload["action"] in {"demo", "source"}:
+            settings = json.loads(argv[2])
+            job["label"] = settings["label"] if payload["action"] == "demo" else (
+                f'{settings["repository"]} @ {settings["sha"][:10]} · {settings["kind"]}'
+            )
+        if payload["action"] == "group":
+            from .benchmarks.core import digest
+            plan = json.loads(argv[2])
+            job["label"] = plan["design"]["label"]
+            job["group_input_digest"] = digest(plan)
+            input_path = directory / "group-input.json"
+            _write(input_path, plan)
+            job["argv"] = ["group", "--plan-file", str(input_path), "--plan-digest", digest(plan),
+                           "--output", str(directory)]
+        if payload["action"] == "tool":
+            spec=json.loads(argv[2])
+            job["label"]=("Collect existing tool setup" if "recover" in spec else
+                          "Prepare "+spec["tool"]+" on "+spec["runner"]["transport"])
         _write(directory / "job.json", job)
         try:
             flags = (
@@ -605,7 +721,7 @@ def _supervise(root, identifier):
             )
         receipts = any(
             (directory / name).is_file()
-            for name in ("docker-receipt.json", "remote-receipt.json")
+            for name in ("docker-receipt.json", "remote-receipt.json", "tool-setup-receipt.json")
         )
         evidence_complete = job["paths"]["result"] is not None and child.returncode in (
             0,
