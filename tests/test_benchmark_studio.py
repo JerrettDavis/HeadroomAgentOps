@@ -1,3 +1,4 @@
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -6,12 +7,6 @@ import pytest
 
 from agentops.benchmark_studio import catalogue, validate_design, demo
 from agentops.benchmarks.core import digest
-
-
-def test_demo_synthetic_revision_uses_the_sha256_source_identity(tmp_path):
-    result = demo(catalogue()['templates'][0]['design'], tmp_path)
-    candidate = result['studio']['manifest']['candidate']
-    assert candidate['sha'] == candidate['artifact_sha256'].removeprefix('sha256:')[:40]
 
 
 def test_measured_design_library_keeps_named_snapshots_without_launching_jobs(tmp_path):
@@ -109,6 +104,9 @@ def test_demo_runs_real_pairs_with_hashed_simulator_evidence(tmp_path):
     assert digest(evidence) == summary['result_sha256']
     assert evidence['studio']['design'] == validate_design(design)
     assert evidence['studio']['template_version'] == 1
+    candidate = evidence['studio']['manifest']['candidate']
+    assert candidate['sha'] == hashlib.sha256(candidate['artifact_sha256'].encode()).hexdigest()[:40]
+    assert demo(design, tmp_path / 'repeat')['studio']['manifest']['candidate'] == candidate
 
 
 def test_service_demo_is_durable_and_has_no_external_inputs(tmp_path):

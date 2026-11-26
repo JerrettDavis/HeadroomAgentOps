@@ -104,7 +104,7 @@ def demo(payload, directory):
     source = digest({'simulator': 1, 'scenarios': SCENARIOS, 'models': MODELS})
     manifest = {'schema_version': 1, 'experiment_id': design['label'],
                 'seed': design['seed'], 'repeats': design['repeats'],
-                'candidate': {'sha': source.removeprefix('sha256:')[:40], 'artifact_sha256': source},
+                'candidate': {'sha': hashlib.sha256(source.encode()).hexdigest()[:40], 'artifact_sha256': source},
                 'rollout': {'registry_digest': digest(FEATURES), 'snapshot_digest': digest(design['features'])},
                 'model': 'studio-simulator-v1', 'agent': 'synthetic-paired-v1',
                 'taskset_id': 'studio-demo-v1', 'taskset_revision': 'v1', 'tasks': tasks,
