@@ -1,9 +1,12 @@
 """Token-protected local file navigation using server-issued locations only."""
 
 import os
+import ntpath
+import posixpath
+import stat
 import threading
 from collections import OrderedDict
-from pathlib import Path
+from pathlib import Path, PureWindowsPath, PurePosixPath
 
 _KINDS = {
     "wheel": {".whl"},
@@ -69,6 +72,65 @@ class FileBrowser:
             if str(source) in self.issued
             else next(iter(self.issued.values()), None)
         )
+
+    def resolve_file(self, location, kind="wheel"):
+        """Typed paths select actual entries under trusted local roots.
+
+        Never resolve/stat caller text: Windows can authenticate to a network
+        filesystem during resolution, before ordinary extension checks run.
+        """
+        if (kind not in _KINDS or not isinstance(location, str) or not location or
+                len(location) > 8192 or '\x00' in location or location.startswith(('\\\\', '//'))):
+            raise ValueError('Choose a regular file on a local drive')
+        if len(location) > 1 and location[1] == ':' and location[2:3] not in ('\\', '/'):
+            raise ValueError('Drive-relative paths are not supported')
+        windows = os.name == 'nt'
+        pure_type = PureWindowsPath if windows else PurePosixPath
+        if location.startswith(('~/', '~\\')):
+            location = str(Path.home()) + os.sep + location[2:]
+        if not pure_type(location).is_absolute():
+            location = str(Path.cwd()) + os.sep + location
+        normalized = (ntpath.normpath if windows else posixpath.normpath)(location)
+        pure = pure_type(normalized)
+        if (not pure.is_absolute() or str(pure).startswith(('\\\\', '//')) or
+                (windows and (len(pure.drive) != 2 or not pure.drive[0].isascii() or
+                              not pure.drive[0].isalpha() or pure.drive[1] != ':')) or
+                (_KINDS[kind] is not None and pure.suffix.lower() not in _KINDS[kind])):
+            raise ValueError('Choose a supported local file')
+        parts = pure.parts
+        compare = (lambda part: part.casefold()) if windows else (lambda part: part)
+        with self.lock:
+            roots = [self.issued[r['path']] for r in self.roots if r['path'] in self.issued]
+            matching = [root for root in roots if tuple(map(compare, parts[:len(root.parts)])) ==
+                        tuple(map(compare, root.parts))]
+            if not matching:
+                raise ValueError('Location is not on a supported local drive')
+            current = min(matching, key=lambda root: len(root.parts))
+            if windows:
+                import ctypes
+                if ctypes.windll.kernel32.GetDriveTypeW(current.anchor) not in (2, 3, 5, 6):
+                    raise ValueError('Network drives are not supported')
+            remaining = parts[len(current.parts):]
+            if not remaining:
+                raise ValueError('Select a regular file')
+            for index, component in enumerate(remaining):
+                if component in ('.', '..') or (windows and (':' in component or
+                        component.rstrip(' .').split('.')[0].upper() in
+                        {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)),
+                         *(f'LPT{i}' for i in range(1, 10))})):
+                    raise ValueError('Unsupported file path component')
+                item = next((entry for entry in current.iterdir() if compare(entry.name) == compare(component)), None)
+                if item is None:
+                    raise ValueError('Selected file is unavailable')
+                observed = item.lstat()
+                if stat.S_ISLNK(observed.st_mode) or getattr(observed, 'st_file_attributes', 0) & 0x400:
+                    raise ValueError('Linked and reparse locations are not supported')
+                final = index == len(remaining) - 1
+                if not (stat.S_ISREG(observed.st_mode) if final else stat.S_ISDIR(observed.st_mode)):
+                    raise ValueError('Selected location is not a regular local file')
+                current = item
+            self.issued[str(current)] = current
+            return current
 
     def list(self, location="", kind="json"):
         if kind not in _KINDS or not isinstance(location, str) or len(location) > 8192:
@@ -141,3 +203,7 @@ _BROWSER = FileBrowser()
 
 def list_files(location="", kind="json"):
     return _BROWSER.list(location, kind)
+
+
+def resolve_local_file(location, kind="wheel"):
+    return _BROWSER.resolve_file(location, kind)

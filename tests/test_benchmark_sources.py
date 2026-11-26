@@ -3,6 +3,12 @@ import pytest
 from agentops.benchmark_sources import Sources
 
 
+def test_repository_rejects_unbounded_components_without_regex_backtracking():
+    from agentops.benchmark_sources import repository
+    with pytest.raises(ValueError):
+        repository('-' * 100000 + '/repo')
+
+
 class Remote:
     def __init__(self):
         self.calls = []

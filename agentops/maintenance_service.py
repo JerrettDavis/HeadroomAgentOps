@@ -123,9 +123,9 @@ class MaintenanceService:
         row = self.store.get('repair', key)
         if not row or row.get('state') != 'source_held' or not row.get('prepared'):
             raise ValueError('No retained source repair for this incident')
-        checkout = Path(row['prepared']['checkout']).resolve()
-        if not checkout.is_relative_to(self.engine.root.resolve()):
-            raise ValueError('Source candidate checkout is outside owned storage')
+        checkout = self.engine.owned_checkout(row['prepared']['checkout'])
+        self.engine._sha(row['main_sha'])
+        self.engine._sha(row['candidate'])
         diff = self.engine.git(['diff', '--no-ext-diff', '--no-textconv', '--no-color',
             row['main_sha'], row['candidate'], '--', '.github', '.gitmodules'], checkout)
         return {k: row.get(k) for k in ('candidate', 'source_manifest', 'summary', 'validation', 'protected_paths')} | {

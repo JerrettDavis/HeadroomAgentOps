@@ -213,16 +213,17 @@ def inspect_wheel(path):
 
 
 def resolve_source(source,service):
+    from .benchmark_files import resolve_local_file
     if source['kind']=='prepared':
         if not source['job_id']:
             raise ValueError('Select a prepared wheel or choose a local wheel')
         from .benchmark_studio import Studio
         record=Studio(service).source(source['job_id'])
-        path=Path(record['artifact'])
+        path=resolve_local_file(record['artifact'],'wheel')
         sha=record['sha']
         provenance={**record['provenance'],'repository':record['repository'],'source_job_id':record['id']}
     else:
-        path=Path(source['artifact']).expanduser().resolve()
+        path=resolve_local_file(source['artifact'],'wheel')
         sha=source['sha']
         provenance={'strategy':'local'}
         if not source['artifact'] or not sha:

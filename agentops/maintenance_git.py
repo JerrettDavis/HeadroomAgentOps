@@ -9,6 +9,15 @@ from .stack_git import GitStack
 
 
 class MaintenanceGit(GitStack):
+    def owned_checkout(self, recorded):
+        for directory in self.root.iterdir():
+            if directory.is_symlink() or not directory.is_dir() or not re.fullmatch('[a-f0-9-]{36}', directory.name):
+                continue
+            checkout = directory / 'repo'
+            if str(checkout) == recorded and checkout.is_dir() and not checkout.is_symlink():
+                return checkout
+        raise ValueError('Checkout outside owned maintenance storage')
+
     def _sha(self, value):
         if not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{40,64}', value):
             raise ValueError('Expected an immutable commit ID')
@@ -76,9 +85,7 @@ class MaintenanceGit(GitStack):
         return f'https://github.com/{repo}.git'
 
     def publish(self, record):
-        checkout = Path(record['checkout']).resolve()
-        if not checkout.is_relative_to(self.root.resolve()):
-            raise ValueError('Checkout outside owned maintenance directory')
+        checkout = self.owned_checkout(record['checkout'])
         branch = record['head_ref']
         self.git(['check-ref-format', 'refs/heads/' + branch], checkout)
         old, new = self._sha(record['head_sha']), self._sha(record['new_head'])

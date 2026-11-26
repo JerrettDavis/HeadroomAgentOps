@@ -24,6 +24,7 @@ class Models:
     def __init__(self,fetcher=_fetch,ttl=120):
         self.fetcher,self.ttl=fetcher,ttl
         self.cache={}
+        self.cache_salt=os.urandom(16)
         self.lock=threading.Lock()
 
     def list(self,provider):
@@ -58,7 +59,7 @@ class Models:
         if not key:
             return {'status':'missing_credentials','models':[],'message':'Configure '+name+' on the runner host, then load available models.'}
         # A credential rotation must not reuse another account's model catalogue.
-        identity=(provider,hashlib.sha256(key.encode()).hexdigest())
+        identity=(provider,hashlib.pbkdf2_hmac('sha256',key.encode(),self.cache_salt,100000).hex())
         with self.lock:
             cached=self.cache.get(identity)
             if cached and time.monotonic()-cached[0]<self.ttl:

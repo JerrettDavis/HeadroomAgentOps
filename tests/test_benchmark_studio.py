@@ -8,6 +8,12 @@ from agentops.benchmark_studio import catalogue, validate_design, demo
 from agentops.benchmarks.core import digest
 
 
+def test_demo_synthetic_revision_uses_the_sha256_source_identity(tmp_path):
+    result = demo(catalogue()['templates'][0]['design'], tmp_path)
+    candidate = result['studio']['manifest']['candidate']
+    assert candidate['sha'] == candidate['artifact_sha256'].removeprefix('sha256:')[:40]
+
+
 def test_measured_design_library_keeps_named_snapshots_without_launching_jobs(tmp_path):
     from agentops.benchmark_studio import Studio
     from agentops.benchmark_experiments import catalogue as measured_catalogue

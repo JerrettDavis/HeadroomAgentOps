@@ -6,6 +6,22 @@ from agentops.benchmark_files import FileBrowser, list_files
 
 
 class BenchmarkFilePickerTests(unittest.TestCase):
+    def test_typed_local_wheel_walks_trusted_directories_without_resolving_request_text(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            nested = root / 'nested'
+            nested.mkdir()
+            wheel = nested / 'candidate.whl'
+            wheel.write_bytes(b'fixture')
+            browser = FileBrowser([root])
+            with patch.object(Path, 'resolve', side_effect=AssertionError('request resolution is forbidden')):
+                self.assertEqual(browser.resolve_file(str(wheel), 'wheel'), wheel)
+                for location in (r'\\external\share\candidate.whl', '//external/share/candidate.whl',
+                                 r'\\?\C:\candidate.whl', r'\\.\device\candidate.whl', 'C:relative.whl'):
+                    with self.assertRaises(ValueError):
+                        browser.resolve_file(location, 'wheel')
+
     def test_filters_files_but_preserves_directory_navigation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

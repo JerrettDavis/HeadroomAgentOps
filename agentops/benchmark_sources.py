@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import re
+import string
 import threading
 import time
 from collections import OrderedDict
@@ -10,7 +11,9 @@ from urllib.parse import urlencode
 
 
 def repository(value):
-    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value) or any(p in {'.','..'} for p in value.split('/')):
+    allowed = frozenset(string.ascii_letters + string.digits + '_.-')
+    parts = value.split('/') if isinstance(value, str) and len(value) <= 201 else []
+    if len(parts) != 2 or any(not 1 <= len(p) <= 100 or p in {'.', '..'} or not set(p) <= allowed for p in parts):
         raise ValueError('Use a repository in owner/name form')
     return value
 
