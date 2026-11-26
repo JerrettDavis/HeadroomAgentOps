@@ -10,6 +10,44 @@ import pytest
 from agentops import benchmark_tool_setup as setup
 
 
+@pytest.mark.parametrize('command,preserved', [
+    (['docker', 'image', 'inspect', 'selected'], {
+        'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_TLS', 'DOCKER_TLS_VERIFY',
+        'DOCKER_CERT_PATH', 'HOME', 'USERPROFILE', 'SSH_AUTH_SOCK', 'SSH_AGENT_PID',
+    }),
+    (['ssh', '-o', 'BatchMode=yes', '--', 'worker', 'true'], {
+        'SSH_AUTH_SOCK', 'SSH_AGENT_PID', 'HOME', 'USERPROFILE',
+    }),
+    (['python', '-I', '-c', 'pass'], set()),
+])
+def test_host_transport_keeps_connection_context_without_provider_credentials(monkeypatch, command, preserved):
+    settings = {
+        'DOCKER_HOST': 'ssh://docker-worker', 'DOCKER_CONTEXT': 'selected-context',
+        'DOCKER_CONFIG': '/private/docker-config', 'DOCKER_TLS': '1', 'DOCKER_TLS_VERIFY': '1',
+        'DOCKER_CERT_PATH': '/private/docker-tls', 'HOME': '/home/runner',
+        'USERPROFILE': 'C:/Users/runner', 'SSH_AUTH_SOCK': '/tmp/agent.sock',
+        'SSH_AGENT_PID': '123', 'OPENAI_API_KEY': 'private-openai',
+        'ANTHROPIC_API_KEY': 'private-anthropic', 'AWS_ACCESS_KEY_ID': 'private-aws-id',
+        'AWS_SECRET_ACCESS_KEY': 'private-aws-secret', 'AWS_SESSION_TOKEN': 'private-aws-session',
+        'AZURE_OPENAI_API_KEY': 'private-azure', 'HTTPS_PROXY': 'http://private-proxy',
+        'PYTHONPATH': '/private/injection', 'DOCKER_AUTH_CONFIG': 'private-registry-auth',
+    }
+    for key, value in settings.items():
+        monkeypatch.setenv(key, value)
+    captured = []
+    def run(command, **kwargs):
+        captured.append(kwargs['env'])
+        return subprocess.CompletedProcess(command, 0, '', '')
+    monkeypatch.setattr(setup.subprocess, 'run', run)
+    setup._run(command)
+    child = captured[0]
+    for key, value in settings.items():
+        if key in preserved:
+            assert child[key] == value
+        else:
+            assert key not in child
+
+
 def test_local_readiness_never_installs(tmp_path, monkeypatch):
     python = tmp_path / 'inspect-0.3.292' / 'bin' / 'python'
     python.parent.mkdir(parents=True)

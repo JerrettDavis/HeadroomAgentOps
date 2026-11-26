@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -60,8 +61,19 @@ def _write(path, value):
 
 
 def _run(command, timeout=30, **kwargs):
+    env = tools._environment()
+    executable = Path(str(command[0])).name.lower().removesuffix('.exe')
+    # These are host CLI connection settings, never installer/provider env.
+    # Docker can itself use an SSH-backed context, so retain its agent access.
+    allowed = set()
+    if executable in ('docker', 'ssh'):
+        allowed.update(('HOME', 'USERPROFILE', 'SSH_AUTH_SOCK', 'SSH_AGENT_PID'))
+    if executable == 'docker':
+        allowed.update(('DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG',
+                        'DOCKER_TLS', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH'))
+    env.update({key: value for key, value in os.environ.items() if key.upper() in allowed})
     return subprocess.run(command, capture_output=True, text=True, timeout=timeout,
-                          env=tools._environment(),
+                          env=env,
                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), **kwargs)
 
 
