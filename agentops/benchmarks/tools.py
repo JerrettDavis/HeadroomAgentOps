@@ -108,14 +108,15 @@ def prepare(tool: str, root: Path) -> dict:
     python = directory / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     directory.parent.mkdir(parents=True, exist_ok=True)
     uv = shutil.which('uv')
+    env = _environment()
     with (directory.parent / f'{tool}-setup.log').open('ab') as log:
         if not python.is_file():
             command = [uv, 'venv', '--python', '3.12', str(directory)] if uv else [sys.executable, '-m', 'venv', str(directory)]
-            subprocess.run(command, check=True, stdout=log, stderr=log, timeout=300)
+            _execute(command, directory.parent, env, log, timeout=300).check_returncode()
         if not available(tool, {'python': str(python)})['available']:
             requirements = [f'{package}=={version}'] + ([INSPECT_TRANSPORT] if tool == 'inspect' else [])
             command = [uv, 'pip', 'install', '--python', str(python), *requirements] if uv else [str(python), '-m', 'pip', 'install', *requirements]
-            subprocess.run(command, check=True, stdout=log, stderr=log, timeout=600)
+            _execute(command, directory.parent, env, log, timeout=600).check_returncode()
             _probe.cache_clear()
     return available(tool, {'python': str(python)})
 

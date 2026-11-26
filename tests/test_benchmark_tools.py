@@ -11,6 +11,28 @@ from types import SimpleNamespace
 import pytest
 
 
+def test_explicit_setup_does_not_pass_provider_credentials_to_installers(tmp_path, monkeypatch):
+    from agentops.benchmarks import tools
+    for key in ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'):
+        monkeypatch.setenv(key, 'private-installer-test-secret')
+    calls = []
+    def record(command, env):
+        calls.append((command, env))
+        return subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr(tools.subprocess, 'run', lambda command, **kwargs: record(command, kwargs.get('env')))
+    monkeypatch.setattr(tools, '_execute', lambda command, directory, env, log, timeout: record(command, env))
+    monkeypatch.setattr(tools.shutil, 'which', lambda command: 'uv')
+    monkeypatch.setattr(tools, 'available', lambda *args: {'available': len(calls) == 2, 'version': '0.3.292'})
+    assert tools.prepare('inspect', tmp_path)['available']
+    assert len(calls) == 2
+    assert 'venv' in calls[0][0]
+    assert 'install' in calls[1][0]
+    for _, env in calls:
+        assert env is not None, 'installer inherited the full process environment'
+        assert not any(key in env for key in ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'))
+        assert 'private-installer-test-secret' not in env.values()
+
+
 def test_cancellation_does_not_wait_for_upstream_and_reserves_only_one_request(tmp_path, monkeypatch):
     from agentops.benchmarks import tools
     entered, release = threading.Event(), threading.Event()
