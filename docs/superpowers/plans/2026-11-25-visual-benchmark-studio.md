@@ -89,3 +89,9 @@ Design approved. Baseline and task 1 implementation next. All five tasks are req
 - Review publication silence fixes are committed; live imports await the authorized safe relaunch. Reload helper/startup handoff preserve exact saved plans and queued jobs; independent review found additional rollback ownership edges under correction before activation.
 - Remaining required scope includes distribution charts, cross-experiment comparison, broader saved-design library and throughput sweep support; this checkpoint does not complete the goal.
 - Verification: full Python regression 670 passed, 18 skipped, 71 subtests; full browser regression 51 passed after focused help-overlay correction. Subsequent provider binding/provenance and transport/recovery checks: 45 passed. Reload ownership fixes: 56 passed plus 2 subtests. Independent measured review found provider routing issue; fixed explicit direct-protocol binding with eight regression cases.
+
+2026-11-26 results exploration slice:
+- Added per-arm input-token and latency sample dotplots, min/quartiles/median/max and sample counts with accessible tables. Missing measurements stay absent; small samples explicitly request more evidence. Added model filtering.
+- Added saved-run comparison keyed by scenario/provider/model/tool/feature with source identities, lane labels, descriptive candidate token/latency changes, configuration-difference notices and guarded asynchronous loading. No new model requests are made by comparison.
+- Verification: all 52 browser tests passed; independent results review cleared and independently reran eight provider-routing regressions. Mobile chart/table screenshots inspected; chart font enlarged and visible metric labels added, then focused comparison test passed.
+- Runtime c5f0e4d relaunched from immutable detached checkout with saved configs and watch settings preserved; freshness reconciliation audit is still in progress. Overall goal remains active.

@@ -1,5 +1,34 @@
 const {test,expect}=require('@playwright/test');
 
+test('saved experiments show sample distributions and descriptive cross-run changes',async({page})=>{
+  const ids=['a'.repeat(32),'b'.repeat(32)];
+  const cell=(tokens)=>({id:'cell',state:'completed',scenario:'smoke',provider:'openai',model:'pinned',tool:'native',feature:'default',
+    decision:{status:'inconclusive'},evidence:{schema_version:2,attempts:['baseline','candidate'].flatMap(arm=>
+      [0,1,2,3,4].map(i=>({arm,pair_id:String(i),tokens:arm==='baseline'?100:tokens+i,latency_ms:10+i,success:true})))}});
+  await page.route('**/api/benchmarks/measured**',async route=>{
+    const group=new URL(route.request().url()).searchParams.get('group');
+    if(group){const index=ids.indexOf(group);return route.fulfill({json:{qualification:{status:'inconclusive'},result:{
+      experiment_id:index?'Previous run':'Current run',design:{label:'Saved design',seed:index?9:42},lane:'simulator',
+      sources:{candidate:{sha:(index?'c':'d').repeat(40)}},cells:[cell(index?80:70)]}}});}
+    const response=await route.fetch();const state=await response.json();
+    state.groups=ids.map((id,i)=>({id,label:i?'Previous run':'Current run',state:'completed',group_state:'completed',created_at:1,cells:[]}));
+    await route.fulfill({json:state});
+  });
+  await page.goto('/');await page.getByRole('button',{name:'Benchmarking',exact:true}).click();
+  const root=page.getByRole('region',{name:'Measured experiment designer',exact:true});
+  await root.getByRole('button',{name:'Explore experiment aaaaaaaa',exact:true}).click();
+  await expect(root.getByRole('img',{name:'Input token sample distribution: smoke'})).toBeVisible();
+  await expect(root.getByRole('table',{name:'Sample distribution summary'})).toContainText('72.0');
+  await root.getByLabel('Compare with saved experiment',{exact:true}).selectOption(ids[1]);
+  const comparison=root.getByRole('table',{name:'Saved experiment comparison'});
+  await expect(comparison).toContainText('-10.0');
+  await expect(root.getByText('Run settings differ. These changes are descriptive and do not establish a regression.',{exact:true})).toBeVisible();
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await root.locator('.measured-distributions').screenshot({path:'../../.agentops/measured-distributions-mobile.png'});
+  await root.getByRole('heading',{name:'Compare saved experiments',exact:true}).locator('..').screenshot({path:'../../.agentops/measured-comparison-mobile.png'});
+});
+
 async function start(page){
   await page.goto('/');
   await page.getByRole('button',{name:'Benchmarking',exact:true}).click();

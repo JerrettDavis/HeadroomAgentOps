@@ -13,6 +13,7 @@
   let restorePending=true,watchPending=false,navigationVersion=0;
   const pendingKey='agentops-measured-submission';
   const models={};const filters={};
+let comparison=null,comparisonId='',comparisonVersion=0;
   const terminal=new Set(['completed','cancelled','failed','interrupted','recoverable']);
   async function request(path,payload){
     const auth=await fetch('/api/launcher');if(!auth.ok)throw Error('Dashboard authentication unavailable. Refresh and try again.');
@@ -103,9 +104,47 @@
   function renderSetups(){
     root.querySelector('[data-tool-history]').innerHTML=toolSetups.length?`<h3>Tool runtime setup</h3>${toolSetups.map(job=>`<article class="measured-history-item"><strong>${esc(job.label||job.id.slice(0,8))}</strong><p>${esc(job.state)}${job.setup?.available?' · pinned runtime ready':''}</p>${job.setup?.reason?`<p class="studio-note">${esc(job.setup.reason)}</p>`:''}${job.setup?.available&&job.setup.image_identity?`<p>Prepared image <code>${esc(job.setup.image_identity)}</code></p><button type="button" data-use-tool-image="${esc(job.id)}">Use prepared Docker runner</button>`:''}${job.collectable&&terminal.has(job.state)?`<button type="button" data-collect-tool="${esc(job.id)}">Collect existing tool setup</button>`:''}${!terminal.has(job.state)?`<button type="button" data-cancel-group="${esc(job.id)}">Cancel tool setup</button>`:''}</article>`).join('')}`:'';
   }
+  function samples(cell,arm,key){
+    const arms=cell.evidence?.schema_version===2?['baseline','candidate']:['a1_passthrough','b_headroom'];
+    return (cell.evidence?.attempts||[]).filter(a=>a.arm===arms[arm]&&Number.isFinite(a[key])).map(a=>a[key]).sort((a,b)=>a-b);
+  }
+  function average(values){return values.length?values.reduce((a,b)=>a+b,0)/values.length:null;}
+  function number(value){return Number.isFinite(value)?value.toFixed(1):'—';}
+  function distributions(cells){
+    return cells.map(cell=>{
+      const summaries=[];
+      const plots=[['tokens','Input token'],['latency_ms','Latency (ms)']].map(([key,label])=>{
+        const arms=[samples(cell,0,key),samples(cell,1,key)];
+        if(arms.some(values=>values.length<2))return `<p>${esc(label)} distribution needs at least two measurements in each arm.</p>`;
+        const minimum=Math.min(...arms.flat()),maximum=Math.max(...arms.flat());
+        const x=value=>100+(value-minimum)/(maximum-minimum||1)*350;
+        const quantile=(values,p)=>{const index=(values.length-1)*p,low=Math.floor(index);return values[low]+(values[Math.ceil(index)]-values[low])*(index-low);};
+        arms.forEach((values,i)=>summaries.push(`<tr><th>${esc(label)}</th><td>${i?'Candidate':'Baseline'}</td><td>${values.length}</td>${[values[0],quantile(values,.25),quantile(values,.5),quantile(values,.75),values.at(-1)].map(v=>`<td>${number(v)}</td>`).join('')}</tr>`));
+        const heading=`<h5>${esc(label)} samples</h5>`;
+        return heading+`<svg class="measured-distribution" viewBox="0 0 480 110" role="img" aria-label="${esc(label)} sample distribution: ${esc(cell.scenario)}"><line x1="100" x2="450" y1="82" y2="82" stroke="currentColor"/><text x="100" y="102">${number(minimum)}</text><text x="450" y="102" text-anchor="end">${number(maximum)}</text>${arms.map((values,i)=>`<text x="0" y="${29+i*34}">${i?'Candidate':'Baseline'}</text>${values.map((v,j)=>`<circle cx="${x(v)}" cy="${24+i*34+(j%3-1)*4}" r="3" class="${i?'measured-dot-candidate':'measured-dot-baseline'}"><title>${i?'Candidate':'Baseline'}: ${number(v)}</title></circle>`).join('')}`).join('')}</svg>`;
+      }).join('');
+      return `<section class="measured-distributions"><h4>Sample distributions</h4><p>${esc(cell.scenario)} · ${esc(cell.provider)} / ${esc(cell.model)} · ${esc(cell.tool)} · ${esc(cell.feature)}</p>${plots}${summaries.length?`<div class="studio-table"><table aria-label="Sample distribution summary"><thead><tr><th>Metric</th><th>Arm</th><th>Samples</th><th>Min</th><th>25%</th><th>Median</th><th>75%</th><th>Max</th></tr></thead><tbody>${summaries.join('')}</tbody></table></div>`:''}</section>`;
+    }).join('');
+  }
+  function comparisonView(cells){
+    const options=groups.filter(g=>g.id!==selected&&['completed','cancelled'].includes(g.state));
+    const selector=`<label class="studio-input">Compare with saved experiment<select data-m-compare aria-label="Compare with saved experiment"><option value="">Choose a saved run</option>${options.map(g=>`<option value="${esc(g.id)}" ${comparisonId===g.id?'selected':''}>${esc(g.label||g.id.slice(0,8))}</option>`).join('')}</select></label>`;
+    if(!comparison)return `<section><h4>Compare saved experiments</h4>${selector}</section>`;
+    const signature=c=>JSON.stringify([c.scenario,c.provider,c.model,c.tool,c.feature]);
+    const settings=run=>Object.fromEntries(Object.entries(run.design||{}).filter(([key])=>key!=='label'));
+    const differences=result.lane!==comparison.lane||JSON.stringify(ordered(settings(result)))!==JSON.stringify(ordered(settings(comparison)));
+    const rows=cells.map(cell=>{
+      const peer=comparison.cells.find(c=>signature(c)===signature(cell));
+      const current=average(samples(cell,1,'tokens')),previous=peer?average(samples(peer,1,'tokens')):null;
+      const latency=average(samples(cell,1,'latency_ms')),oldLatency=peer?average(samples(peer,1,'latency_ms')):null;
+      return `<tr><th>${esc(cell.scenario)} / ${esc(cell.provider)} / ${esc(cell.model)} / ${esc(cell.tool)} / ${esc(cell.feature)}</th><td>${number(previous)}</td><td>${number(current)}</td><td>${number(current!==null&&previous!==null?current-previous:null)}</td><td>${number(latency!==null&&oldLatency!==null?latency-oldLatency:null)}</td><td>${peer?esc(peer.state):'No matching cell'}</td></tr>`;
+    }).join('');
+    const identity=run=>Object.entries(run.sources||{}).map(([arm,source])=>`${arm}: ${source.sha||'unavailable'}`).join('; ');
+    return `<section><h4>Compare saved experiments</h4>${selector}<p>Current: ${esc(result.experiment_id)} (${esc(result.lane)}) · ${esc(identity(result))}</p><p>Saved: ${esc(comparison.experiment_id)} (${esc(comparison.lane)}) · ${esc(identity(comparison))}</p><p>${differences?'Run settings differ. These changes are descriptive and do not establish a regression.':'Descriptive comparison of matching cells; qualification remains separate for each experiment.'}</p><div class="studio-table"><table aria-label="Saved experiment comparison"><thead><tr><th>Matching cell</th><th>Saved candidate tokens</th><th>Current candidate tokens</th><th>Token change</th><th>Latency change (ms)</th><th>Saved state</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  }
   function renderResults(panel){
     if(!result){panel.innerHTML='<h3>Experiment is running</h3><p>Follow cell progress below. Drafts and jobs survive reloads; cancellation keeps available evidence.</p>';return;}
-    const keys=['scenario','provider','tool','feature'];
+    const keys=['scenario','provider','model','tool','feature'];
     const displayed=result.cells.filter(c=>keys.every(k=>!filters[k]||c[k]===filters[k]));
     const rows=displayed.map(c=>{
       const attempts=c.evidence?.attempts||[];
@@ -119,8 +158,10 @@
     const interval=values=>Array.isArray(values)&&values.length===2?values.map(x=>n(x*100)+'%').join(' to '):'Insufficient evidence';
     const maximum=Math.max(1,...rows.flatMap(r=>[r.baseline||0,r.candidate||0]));
     panel.innerHTML=`<p class="studio-eyebrow">04 / EXPLORE</p><h3>Experiment results</h3><h4>${esc(result.experiment_id)}</h4><div class="studio-result-summary"><strong>Qualification: ${esc(qualification?.status||'inconclusive')}</strong><span>${result.cells.filter(c=>c.state==='completed').length} / ${result.cells.length} cells completed</span><span>${esc(result.lane)}</span></div>${result.lane==='simulator'?'<p class="studio-note">At least one selected build is a simulator. These observations do not establish live provider performance.</p>':''}<div class="measured-filters">${keys.map(key=>`<label>${esc(key)}<select data-m-filter="${key}"><option value="">All</option>${[...new Set(result.cells.map(c=>c[key]))].map(v=>`<option ${filters[key]===v?'selected':''}>${esc(v)}</option>`).join('')}</select></label>`).join('')}</div><div class="studio-chart" role="img" aria-label="Measured baseline and candidate input tokens">${rows.map(r=>`<div class="studio-chart-row"><strong>${esc(r.scenario)} · ${esc(r.provider)} / ${esc(r.model)} · ${esc(r.feature)} · ${esc(r.tool)}</strong><div class="studio-bar-line"><svg viewBox="0 0 510 12" aria-hidden="true"><rect class="studio-bar-baseline" width="${(r.baseline||0)/maximum*510}" height="12"/></svg><span>${n(r.baseline)}</span></div><div class="studio-bar-line"><svg viewBox="0 0 510 12" aria-hidden="true"><rect class="studio-bar-candidate" width="${(r.candidate||0)/maximum*510}" height="12"/></svg><span>${n(r.candidate)}</span></div></div>`).join('')}</div><div class="studio-table"><table aria-label="Experiment cell metrics"><thead><tr><th>Select for retry</th><th>Scenario / provider / model</th><th>Tool / feature</th><th>Baseline tokens</th><th>Candidate tokens</th><th>Savings</th><th>Baseline ms</th><th>Candidate ms</th><th>State</th></tr></thead><tbody>${rows.map(r=>`<tr><td><input type="checkbox" data-m-retry-cell="${esc(r.id)}" aria-label="Select ${esc(r.scenario)} ${esc(r.provider)} ${esc(r.model)} ${esc(r.feature)} for retry" ${retryCells.has(r.id)?'checked':''}></td><th>${esc(r.scenario)} / ${esc(r.provider)} / ${esc(r.model)}</th><td>${esc(r.tool)} / ${esc(r.feature)}</td><td>${n(r.baseline)}</td><td>${n(r.candidate)}</td><td>${n(r.savings)}%</td><td>${n(r.baselineMs)}</td><td>${n(r.candidateMs)}</td><td>${esc(r.state)} · ${esc(r.decision?.status||'inconclusive')}</td></tr>`).join('')}</tbody></table></div>${rows.map(r=>`<details><summary>Samples, uncertainty and evidence</summary><p>${esc(r.scenario)} · ${esc(r.provider)} / ${esc(r.model)} · ${esc(r.tool)} · ${esc(r.feature)}</p><p>${esc(r.stats.pairs||0)} pairs · token savings 95% interval: ${esc(interval(r.stats.savings_interval))}</p>${r.error?`<p>${esc(r.error)}</p>`:''}<p>${esc(r.evidence?.decision?.reason||'')}</p>${r.evidence?.identity_verification?.mismatches?.length?`<p>Identity checks need attention: ${esc(r.evidence.identity_verification.mismatches.join(', '))}</p>`:''}<div class="studio-table"><table aria-label="Paired request samples"><thead><tr><th>Pair</th><th>Arm</th><th>Tokens</th><th>Latency ms</th><th>Success</th></tr></thead><tbody>${r.attempts.map(a=>`<tr><td>${esc(a.pair_id)}</td><td>${esc(a.arm)}</td><td>${n(a.tokens)}</td><td>${n(a.latency_ms)}</td><td>${esc(a.success)}</td></tr>`).join('')}</tbody></table></div><p>Manifest <code>${esc(r.manifest_digest||'Unavailable')}</code></p><p>Evidence <code>${esc(r.evidence_sha256||'Unavailable')}</code></p></details>`).join('')}${recoveryActions()}<div class="studio-actions"><button type="button" data-m-export>Export experiment evidence</button><button type="button" data-m-duplicate>Edit experiment copy</button></div>`;
+    panel.insertAdjacentHTML('beforeend',distributions(displayed)+comparisonView(displayed));
   }
   async function showGroup(id){
+    comparison=null;comparisonId='';++comparisonVersion;
     const data=await request('/api/benchmarks/measured?group='+encodeURIComponent(id));selected=id;result=data.result;qualification=data.qualification;design=structuredClone(result.design);recovering=null;retryCells.clear();
     result.cells.filter(c=>c.state!=='completed'||c.decision?.status==='inconclusive').forEach(c=>retryCells.add(c.id));step=4;render();
   }
@@ -139,6 +180,16 @@
     }catch(error){status(error.message);}finally{loading=false;}
   }
   root.addEventListener('change',event=>{
+    if(event.target.hasAttribute('data-m-compare')){
+      const id=event.target.value,version=++comparisonVersion,group=selected;
+      comparison=null;comparisonId=id;
+      if(!id){render();return;}
+      request('/api/benchmarks/measured?group='+encodeURIComponent(id)).then(data=>{
+        if(version!==comparisonVersion||group!==selected||step!==4)return;
+        comparison=data.result;render();
+      }).catch(error=>{if(version===comparisonVersion)status(error.message);});
+      return;
+    }
     if(event.target.dataset.mRetryCell){
       if(event.target.checked)retryCells.add(event.target.dataset.mRetryCell);else retryCells.delete(event.target.dataset.mRetryCell);
       root.querySelectorAll('[data-retry-count]').forEach(node=>node.textContent=String(retryCells.size));

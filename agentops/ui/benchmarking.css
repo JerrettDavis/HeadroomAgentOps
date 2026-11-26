@@ -57,3 +57,8 @@
 .benchmark-guide h4 { font-size: 1rem; margin-bottom: .5rem; }
 .benchmark-guide-actions { gap: 6px; margin-top: 12px; justify-content: flex-end; }
 .benchmark-guide button:focus-visible, .benchmark-help-controls button:focus-visible { outline: 2px solid #69caff; outline-offset: 3px; }
+.measured-distribution { display: block; width: min(100%, 620px); height: auto; margin: 12px 0; overflow: visible; }
+.measured-distribution text { fill: var(--text); font: 18px sans-serif; }
+.measured-dot-baseline { fill: #75869b; }
+.measured-dot-candidate { fill: #138bba; }
+.measured-distributions { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 20px; }
