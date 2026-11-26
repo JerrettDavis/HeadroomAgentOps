@@ -3,6 +3,7 @@ const {test, expect} = require('@playwright/test');
 async function fixture(page, initial = []) {
   const state = {jobs: initial, posts: []};
   await page.route('**/api/launcher', route => route.fulfill({json:{token:'benchmark-test-token'}}));
+await page.route('**/api/benchmarks/studio', route => route.fulfill({status:503,json:{error:'Studio disabled in legacy fixture.'}}));
   await page.route('**/api/benchmark-files?**', route => route.fulfill({json:{directory:'/fixture',parent:'/',roots:[{name:'Home',path:'/fixture'}],entries:['/candidate.whl','/missing','/keep-this'].map(path => ({name:path.slice(1),path,directory:false})),kind:'wheel'}}));
   await page.route('**/api/benchmarks', async route => {
     if (route.request().method() === 'POST') {
@@ -15,6 +16,7 @@ async function fixture(page, initial = []) {
   await page.goto('/');
   await page.getByRole('button',{name:'Benchmarking',exact:true}).click();
   await expect(page.locator('#benchmark-status')).toContainText('up to date');
+await expect(page.locator('.studio [data-studio-status]')).toHaveText('Studio disabled in legacy fixture.');
   return state;
 }
 
@@ -197,7 +199,7 @@ for (const width of [1280, 390]) {
     const geometry=()=>page.locator('#benchmark-view').evaluate(root=>
       [...root.querySelectorAll('form, form label, form input, form select, form button')]
         .filter(el=>el.getClientRects().length).map(el=>{
-          const r=el.getBoundingClientRect();return [r.x,r.y,r.width,r.height];
+const r=el.getBoundingClientRect();return [r.x+root.scrollLeft+window.scrollX,r.y+root.scrollTop+window.scrollY,r.width,r.height];
         }));
     const before=await geometry();
     await toggle.click();

@@ -31,6 +31,7 @@ _PUBLIC = (
 )
 _THREAD_LOCK = threading.RLock()
 _FIELDS = {
+    "demo": {"design"},
     "inspect": {
         "artifact",
         "config",
@@ -275,6 +276,13 @@ class BenchmarkService:
         return matches[0]
 
     def _argv(self, payload, directory):
+        if isinstance(payload, dict) and payload.get("action") == "demo":
+            from .benchmark_studio import validate_design
+            if set(payload) != {"action", "design"}:
+                raise ValueError("Demo requires only an experiment design")
+            design = validate_design(payload["design"])
+            return (["demo", "--design", json.dumps(design), "--output", str(directory)],
+                    {"inspection": None, "manifest": None, "result": None, "dataset": None})
         if not isinstance(payload, dict) or payload.get("action") not in _FIELDS:
             raise ValueError("Unknown benchmark action")
         action = payload["action"]

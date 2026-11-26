@@ -98,7 +98,17 @@
     try { localStorage.setItem('agentops.benchmark.help', helpEnabled ? 'on' : 'off'); } catch {}
   });
   document.addEventListener('keydown', event => { if (event.key === 'Escape') hideHelp(); });
-  document.addEventListener('scroll', hideHelp, true);
+document.addEventListener('scroll', () => {
+if (activeHelpField?.contains(document.activeElement) && activeHelp) {
+const input = document.activeElement, hint = activeHelp;
+requestAnimationFrame(() => {
+if (activeHelp !== hint) return;
+const bounds = input.getBoundingClientRect();
+if (bounds.bottom < 0 || bounds.top > window.innerHeight) hideHelp();
+else showHelp(input, hint);
+});
+} else hideHelp();
+}, true);
   window.addEventListener('resize', hideHelp);
   const steps = [
     ['Prepare your comparison', 'Compare a candidate build with a baseline using the same requests. Have a candidate wheel (.whl), taskset JSON and policy JSON ready. Files must be accessible to the selected runner. Start with Local if the dependencies and provider credentials are configured on this machine.', 'inspect'],

@@ -153,6 +153,9 @@ def run_local(args):
 def parser():
     root = argparse.ArgumentParser(prog="headroom-benchmark", description=__doc__)
     commands = root.add_subparsers(dest="command", required=True)
+    demonstration = commands.add_parser("demo", help="run an offline Studio simulation without provider calls")
+    demonstration.add_argument("--design", required=True)
+    demonstration.add_argument("--output", required=True)
     export = commands.add_parser(
         "export-dataset", help="export private task inputs for an OSS harness"
     )
@@ -252,6 +255,10 @@ def main(argv=None):
             signum = getattr(signal, name)
             previous[signum] = signal.signal(signum, cancel)
     try:
+        if args.command == "demo":
+            from agentops.benchmark_studio import demo
+            demo(load_json_text(args.design), args.output)
+            return 2
         if args.command == "export-dataset":
             from .interop import export_dataset
 
