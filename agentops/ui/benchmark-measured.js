@@ -14,6 +14,7 @@
   const pendingKey='agentops-measured-submission';
   const models={};const filters={};
 let comparison=null,comparisonId='',comparisonVersion=0;
+let savedDesigns=[];
   const terminal=new Set(['completed','cancelled','failed','interrupted','recoverable']);
   async function request(path,payload){
     const auth=await fetch('/api/launcher');if(!auth.ok)throw Error('Dashboard authentication unavailable. Refresh and try again.');
@@ -61,6 +62,12 @@ let comparison=null,comparisonId='',comparisonVersion=0;
       }
       if(step===3)renderPreflight(panel);
       if(step===4)renderResults(panel);
+    }
+    if(step){
+      const save=document.createElement('button');save.type='button';save.dataset.mSaveDesign='';save.textContent='Save experiment design';
+      content.querySelector('.studio-designer > .studio-actions').append(save);
+    }else{
+      content.insertAdjacentHTML('beforeend',`<section aria-label="Saved experiment designs"><h3>Your experiment library</h3>${savedDesigns.length?savedDesigns.map(item=>`<article class="measured-history-item"><h4>${esc(item.design.label)}</h4><p>${item.design.scenarios.length} scenarios · ${item.design.targets.length} targets · ${item.design.repeats} repeats</p><button type="button" data-open-design="${esc(item.id)}">Open saved design ${esc(item.design.label)}</button><button type="button" data-remove-design="${esc(item.id)}">Remove saved design ${esc(item.design.label)}</button></article>`).join(''):'<p>Save a named design while editing an experiment to keep it here.</p>'}</section>`);
     }
     renderHistory();
   }
@@ -169,6 +176,7 @@ let comparison=null,comparisonId='',comparisonVersion=0;
     if(!visible||loading)return;loading=true;
     try{
       const state=await request('/api/benchmarks/measured');catalogue=state.catalogue;draft=state.draft;sources=state.sources;groups=state.groups;active=state.active;toolSetups=state.tool_setups||[];
+      savedDesigns=state.designs||[];
       if(!initialized){initialized=true;design=structuredClone(draft||catalogue.templates[0].design);render();}else renderHistory();
       const unfinished=pending();const accepted=unfinished&&groups.find(g=>g.client_request_id===unfinished.id);
       if(accepted&&(restorePending||watchPending)){selected=accepted.id;result=null;step=4;render();clearPending();status('Recovered the existing launch. No requests were replayed.');}
@@ -210,6 +218,19 @@ let comparison=null,comparisonId='',comparisonVersion=0;
       else if(button.hasAttribute('data-m-refresh'))await refresh();
       else if(button.hasAttribute('data-m-find-source')){const finder=host.querySelector('.studio-source-finder');finder.open=true;finder.scrollIntoView({block:'start'});finder.querySelector('[name=source-query]').focus();}
       else if(button.hasAttribute('data-m-save')){capture();await request('/api/benchmarks/measured/draft',design);draft=structuredClone(design);status('Measured draft saved.');}
+      else if(button.hasAttribute('data-m-save-design')){
+        capture();const data=await request('/api/benchmarks/measured/designs',{action:'save',design});
+        savedDesigns=data.designs;status('Experiment design saved to your library.');
+      }
+      else if(button.dataset.openDesign){
+        const saved=savedDesigns.find(item=>item.id===button.dataset.openDesign);
+        if(!saved)throw Error('Saved design is unavailable. Refresh the library.');
+        ++navigationVersion;watchPending=false;design=structuredClone(saved.design);selected=null;recovering=null;result=null;report=null;step=1;render();
+      }
+      else if(button.dataset.removeDesign){
+        const data=await request('/api/benchmarks/measured/designs',{action:'remove',id:button.dataset.removeDesign});
+        savedDesigns=data.designs;render();status('Saved design removed from your library.');
+      }
       else if(button.hasAttribute('data-m-next')||button.hasAttribute('data-m-back')||button.dataset.mStep){
         capture();await request('/api/benchmarks/measured/preview',design);await request('/api/benchmarks/measured/draft',design);draft=structuredClone(design);
         const next=button.dataset.mStep?Number(button.dataset.mStep):step+(button.hasAttribute('data-m-next')?1:-1);

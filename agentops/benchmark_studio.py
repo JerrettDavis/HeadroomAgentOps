@@ -13,6 +13,8 @@ from pathlib import Path
 from .benchmarks.core import ARMS, digest, validate_manifest
 from .benchmarks.runner import expected_identity, run_experiment, write_evidence
 
+DESIGN_LIBRARY_BYTES=2*1024*1024
+
 SCENARIOS = [
     {'id': 'conversation', 'name': 'Conversation', 'description': 'Short multi-turn support requests.', 'tokens': 400},
     {'id': 'documents', 'name': 'Long documents', 'description': 'Repeated context in document questions.', 'tokens': 4000},
@@ -196,7 +198,7 @@ class Studio:
                 except (OSError,KeyError,ValueError,TypeError):
                     pass
             groups.append(dict(job,cells=cells,group_state=group_state))
-        return {'catalogue':measured_catalogue(),'draft':draft,'groups':groups,'active':state['active'],'tool_setups':setups,
+        return {'catalogue':measured_catalogue(),'draft':draft,'designs':self._measured_designs(),'groups':groups,'active':state['active'],'tool_setups':setups,
                 'sources':[j for j in state['jobs'] if j['action']=='source' and j['state']=='completed']}
 
     def measured_draft(self,payload):
@@ -206,6 +208,57 @@ class Studio:
         with _guard(self.service.root):
             _write(self.service.root/'measured-draft.json',design)
         return {'draft':design}
+
+    def _measured_designs(self):
+        from .benchmark_experiments import validate
+        path=self.service.root/'measured-designs.json'
+        if not path.is_file():
+            return []
+        if path.stat().st_size>DESIGN_LIBRARY_BYTES:
+            raise ValueError('Saved design library exceeds its supported size')
+        records=json.loads(path.read_text('utf-8'))
+        if not isinstance(records,list) or len(records)>100:
+            raise ValueError('Invalid saved design library')
+        seen=set()
+        for record in records:
+            if not isinstance(record,dict) or set(record)!={'id','design','created_at'}:
+                raise ValueError('Invalid saved experiment design')
+            design=validate(record['design'])
+            if record['id']!=digest(design) or record['id'] in seen or not isinstance(record['created_at'],str):
+                raise ValueError('Saved experiment design identity differs')
+            seen.add(record['id'])
+        return records
+
+    def measured_library(self,payload):
+        from datetime import datetime,UTC
+        from .benchmark_experiments import validate
+        from .benchmark_service import _guard,_write
+        if not isinstance(payload,dict):
+            raise ValueError('Choose a design library action')
+        action=payload.get('action')
+        if action=='save' and set(payload)=={'action','design'}:
+            design=validate(payload['design'])
+            identity=digest(design)
+        elif action=='remove' and set(payload)=={'action','id'} and isinstance(payload['id'],str):
+            identity=payload['id']
+        else:
+            raise ValueError('Choose save or remove with an exact design identity')
+        with _guard(self.service.root):
+            records=self._measured_designs()
+            saved=next((r for r in records if r['id']==identity),None)
+            if action=='save' and saved is None:
+                if len(records)>=100:
+                    raise ValueError('Design library is full; remove an unused saved design')
+                saved={'id':identity,'design':design,'created_at':datetime.now(UTC).isoformat()}
+                records.insert(0,saved)
+            elif action=='remove':
+                if saved is None:
+                    raise ValueError('Saved design is unavailable; refresh the library')
+                records.remove(saved)
+            if len(json.dumps(records,allow_nan=False).encode('utf-8'))>DESIGN_LIBRARY_BYTES:
+                raise ValueError('Saved design library exceeds its supported size; remove an unused design')
+            _write(self.service.root/'measured-designs.json',records)
+        return {'designs':records,**({'saved':saved} if action=='save' else {})}
 
     def group_result(self,identifier):
         from .benchmark_service import _result

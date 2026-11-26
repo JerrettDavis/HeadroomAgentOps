@@ -42,6 +42,22 @@ async function start(page){
   return root;
 }
 
+test('named design library survives reload without submitting an experiment',async({page})=>{
+  let launches=0;
+  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/benchmarks')++launches;});
+  const root=await start(page);
+  await root.getByRole('button',{name:'Back',exact:true}).click();
+  await root.getByLabel('Measured experiment name',{exact:true}).fill('Nightly candidate checks');
+  await root.getByRole('button',{name:'Save experiment design',exact:true}).click();
+  await expect(root.locator('[data-measured-status]')).toHaveText('Experiment design saved to your library.');
+  await page.reload();await page.getByRole('button',{name:'Benchmarking',exact:true}).click();
+  await root.getByRole('button',{name:'Open saved design Nightly candidate checks',exact:true}).click();
+  await expect(root.getByLabel('Measured experiment name',{exact:true})).toHaveValue('Nightly candidate checks');
+  await root.getByRole('button',{name:'Next',exact:true}).click();
+  await expect(root.getByLabel('Model ID 1',{exact:true})).toHaveValue('pinned-model');
+  expect(launches).toBe(0);
+});
+
 test('measured wizard previews every cell, preflights fixture and restores its draft',async({page})=>{
   const root=await start(page);
   await root.getByLabel('Repeated context',{exact:true}).check();

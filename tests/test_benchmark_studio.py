@@ -8,6 +8,57 @@ from agentops.benchmark_studio import catalogue, validate_design, demo
 from agentops.benchmarks.core import digest
 
 
+def test_measured_design_library_keeps_named_snapshots_without_launching_jobs(tmp_path):
+    from agentops.benchmark_studio import Studio
+    from agentops.benchmark_experiments import catalogue as measured_catalogue
+    from agentops.benchmark_service import BenchmarkService
+    service=BenchmarkService(tmp_path/'ledger.sqlite');studio=Studio(service)
+    first=measured_catalogue()['templates'][0]['design']
+    first['label']='Nightly regression'
+    saved=studio.measured_library({'action':'save','design':first})['saved']
+    assert studio.measured_library({'action':'save','design':first})['saved']['id']==saved['id']
+    second=dict(first,label='Release comparison',seed=7)
+    studio.measured_library({'action':'save','design':second})
+    library=Studio(service).measured_state()['designs']
+    assert {item['design']['label'] for item in library}=={'Nightly regression','Release comparison'}
+    assert not service.status()['jobs']
+    with pytest.raises(ValueError):
+        studio.measured_library({'action':'save','design':dict(first,api_key='secret')})
+    studio.measured_library({'action':'remove','id':saved['id']})
+    assert len(Studio(service).measured_state()['designs'])==1
+
+
+def test_design_library_rejects_tampering_without_overwriting_it(tmp_path):
+    from agentops.benchmark_studio import Studio
+    from agentops.benchmark_service import BenchmarkService
+    from agentops.benchmark_experiments import catalogue as measured_catalogue
+    studio=Studio(BenchmarkService(tmp_path/'ledger.sqlite'))
+    design=measured_catalogue()['templates'][0]['design']
+    studio.measured_library({'action':'save','design':design})
+    path=studio.service.root/'measured-designs.json'
+    records=json.loads(path.read_text());records[0]['design']['seed']=99
+    original=json.dumps(records);path.write_text(original)
+    with pytest.raises(ValueError,match='identity differs'):
+        studio.measured_library({'action':'save','design':design})
+    assert path.read_text()==original
+
+
+def test_design_library_rejects_oversized_save_and_keeps_existing_library_removable(tmp_path,monkeypatch):
+    import agentops.benchmark_studio as module
+    from agentops.benchmark_service import BenchmarkService
+    from agentops.benchmark_experiments import catalogue as measured_catalogue
+    studio=module.Studio(BenchmarkService(tmp_path/'ledger.sqlite'))
+    design=measured_catalogue()['templates'][0]['design']
+    saved=studio.measured_library({'action':'save','design':design})['saved']
+    path=studio.service.root/'measured-designs.json';original=path.read_bytes()
+    monkeypatch.setattr(module,'DESIGN_LIBRARY_BYTES',len(original)+20,raising=False)
+    with pytest.raises(ValueError,match='size'):
+        studio.measured_library({'action':'save','design':dict(design,label='Another saved design')})
+    assert path.read_bytes()==original
+    assert len(studio.measured_state()['designs'])==1
+    assert studio.measured_library({'action':'remove','id':saved['id']})['designs']==[]
+
+
 def test_catalogue_is_ready_to_run_and_detached():
     data = catalogue()
     assert len(data['templates']) >= 3
@@ -115,6 +166,13 @@ def test_panel_studio_authenticates_reads_and_draft_preview_writes(tmp_path):
         with urlopen(base+'/api/launcher') as response:
             token=json.load(response)['token']
         headers={'X-Launch-Token':token,'Content-Type':'application/json','Origin':base}
+        from agentops.benchmark_experiments import catalogue as measured_catalogue
+        saved_payload=json.dumps({'action':'save','design':measured_catalogue()['templates'][0]['design']}).encode()
+        with pytest.raises(HTTPError) as unauthorized:
+            urlopen(Request(base+'/api/benchmarks/measured/designs',data=saved_payload))
+        assert unauthorized.value.code==403
+        with urlopen(Request(base+'/api/benchmarks/measured/designs',headers=headers,data=saved_payload)) as response:
+            assert json.load(response)['saved']['design']['template']=='measured-regression'
         with urlopen(Request(base+'/api/benchmarks/studio/draft',headers=headers,data=json.dumps(design).encode())) as response:
             assert json.load(response)['draft']==design
         with urlopen(Request(base+'/api/benchmarks/studio',headers=headers)) as response:

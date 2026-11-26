@@ -428,6 +428,9 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                 elif self.path == '/api/benchmarks/measured/draft':
                     from .benchmark_studio import Studio
                     result = Studio(benchmarks()).measured_draft(payload)
+                elif self.path == '/api/benchmarks/measured/designs':
+                    from .benchmark_studio import Studio
+                    result = Studio(benchmarks()).measured_library(payload)
                 elif self.path == '/api/benchmarks/measured/preview':
                     from .benchmark_experiments import preview
                     result = preview(payload)

@@ -55,6 +55,10 @@ def catalogue():
         ('measured-context','Compression and quality','Compare short, long-context and code requests with the same provider.',{'scenarios':['smoke','long-context','code']}),
         ('measured-features','Feature comparison','Compare default settings and available cache/compression variants.',{'features':['default','no-cache']}),
         ('measured-builds','Compare two builds','Compare two immutable builds, each with its own observed runtime identity.',{'baseline':{'kind':'prepared','job_id':''}}),
+        ('measured-quality','Quality retention','Check exact-answer task success alongside compression and latency, with zero allowed accuracy regression.',
+         {'scenarios':['smoke','long-context','code'],'policy':dict(POLICY,maximum_accuracy_regression=0,minimum_accuracy=1)}),
+        ('measured-providers','Provider and model comparison','Run the same paired tasks on independently configured provider/model targets.',
+         {'targets':[{'provider':'openai','model':''},{'provider':'anthropic','model':''}]}),
     ]:
         templates.append({'id':identifier,'name':name,'description':description,'version':1,
                           'design':dict(base,**changes,template=identifier)})

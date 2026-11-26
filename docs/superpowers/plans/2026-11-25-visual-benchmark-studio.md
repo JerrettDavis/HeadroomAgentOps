@@ -19,33 +19,33 @@ Validate matrix bounds before spawning work; reject unsupported combinations rat
 
 Files: `agentops/benchmark_studio.py`, `agentops/benchmarks/demo.py`, `tests/test_benchmark_studio.py`, package data as needed.
 
-- [ ] Write and run failing tests for template previews, bounded configuration, deterministic paired simulator evidence, and persisted provenance.
-- [ ] Implement `catalogue() -> dict`, `validate_design(payload) -> dict`, and a credential-free demo using `run_experiment`, canonical digests and terminal evidence.
-- [ ] Verify fresh-install execution without external paths or credentials; simulator decisions remain inconclusive for live qualification.
+- [x] Write and run failing tests for template previews, bounded configuration, deterministic paired simulator evidence, and persisted provenance.
+- [x] Implement `catalogue() -> dict`, `validate_design(payload) -> dict`, and a credential-free demo using `run_experiment`, canonical digests and terminal evidence.
+- [x] Verify fresh-install execution without external paths or credentials; simulator decisions remain inconclusive for live qualification.
 
 ### 2. Durable Studio API and groups
 
 Files: `agentops/benchmark_studio.py`, `agentops/panel.py`, `tests/test_panel_benchmark.py`, `tests/test_benchmark_studio.py`.
 
-- [ ] Write and run failing tests for draft round trips, group identities, duplicate launch prevention, recovery, cancellation and partial failures.
-- [ ] Add private catalogue/draft/preflight/group/result routes and persist versioned manifests and child states atomically. Reuse existing service jobs for measured native cells.
-- [ ] Verify API authentication, response redaction, manifest digests and active-job recovery with real subprocesses.
+- [x] Write and run failing tests for draft round trips, group identities, duplicate launch prevention, recovery, cancellation and partial failures.
+- [x] Add private catalogue/draft/preflight/group/result routes and persist versioned manifests and child states atomically. Reuse existing service jobs for measured native cells.
+- [x] Verify API authentication, response redaction, manifest digests and active-job recovery with real subprocesses.
 
 ### 3. Visual landing page, designer and results
 
 Files: `agentops/ui/benchmark-studio.js`, `agentops/ui/benchmarking.css`, `agentops/panel.html`, `tests/ui/benchmark-studio.spec.cjs`.
 
-- [ ] Write and run failing browser tests for one-click demo, template editing, keyboard steps, restored drafts and accessible metric tables.
-- [ ] Add catalogue cards, embedded wizard, source inputs, capability-aware options, bounded matrix preview, preflight/review, live jobs and evidence-derived charts. Retain advanced existing forms.
-- [ ] Verify desktop/mobile rendering, actual demo results and reload behavior.
+- [x] Write and run failing browser tests for one-click demo, template editing, keyboard steps, restored drafts and accessible metric tables.
+- [x] Add catalogue cards, embedded wizard, source inputs, capability-aware options, bounded matrix preview, preflight/review, live jobs and evidence-derived charts. Retain advanced existing forms.
+- [x] Verify desktop/mobile rendering, actual demo results and reload behavior.
 
 ### 4. Immutable source discovery and resolution
 
 Files: `agentops/benchmark_sources.py`, Studio API/UI and `tests/test_benchmark_sources.py`.
 
-- [ ] Write and run failing tests for SHA/message/author/PR queries, bounded pagination/cache, stale client responses, artifact expiry/hash/archive validation and build failures.
-- [ ] Implement repository-scoped commit search and GitHub Actions artifact discovery, managed verified downloads and explicit pinned wheel builds. Persist provenance and surface actionable errors.
-- [ ] Verify real repository search and selected-source execution without mutating the working checkout.
+- [x] Write and run failing tests for SHA/message/author/PR queries, bounded pagination/cache, stale client responses, artifact expiry/hash/archive validation and build failures.
+- [x] Implement repository-scoped commit search and GitHub Actions artifact discovery, managed verified downloads and explicit pinned wheel builds. Persist provenance and surface actionable errors.
+- [x] Verify real repository search and selected-source execution without mutating the working checkout.
 
 ### 5. Measured tools and complete experiment exploration
 
@@ -95,3 +95,10 @@ Design approved. Baseline and task 1 implementation next. All five tasks are req
 - Added saved-run comparison keyed by scenario/provider/model/tool/feature with source identities, lane labels, descriptive candidate token/latency changes, configuration-difference notices and guarded asynchronous loading. No new model requests are made by comparison.
 - Verification: all 52 browser tests passed; independent results review cleared and independently reran eight provider-routing regressions. Mobile chart/table screenshots inspected; chart font enlarged and visible metric labels added, then focused comparison test passed.
 - Runtime c5f0e4d relaunched from immutable detached checkout with saved configs and watch settings preserved; freshness reconciliation audit is still in progress. Overall goal remains active.
+
+2026-11-26 named experiment library:
+- Added authenticated named design snapshots with content identities, validation, atomic persistence, save/open/remove controls, 100-record quota and projected serialized-size checks. Saving/opening never launches experiment work. Tampered and oversized libraries fail explicitly without overwriting prior contents.
+- Added explicit quality retention and provider/model comparison catalogue entries; exact-answer task quality remains scoped to those tasks, not general model quality.
+- Verification: 34 focused backend tests passed, full browser suite 53 passed, then two focused catalogue/library browser checks passed. Independent review found projected-size omission; reproduced red/green and fixed, then reviewer independently cleared three library checks.
+- Immutable runtime59347f4 relaunch verified: all46capturedqueued rows and six configs unchanged, original watches restored, exact assets, unauthenticated mutation403 and actual browser offline demo completed. Audit receipt .agentops/runtime-reload-59347f4-verification.json.
+- Remaining work: integrate/verify genuine bounded throughput sweep, final full regression and spec audit. Remote SSH behavior has unit/receipt tests but no live configured SSH prerequisite; do not claim it live-tested.
