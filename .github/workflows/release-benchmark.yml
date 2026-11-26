@@ -116,7 +116,7 @@ jobs:
                        '--uri', os.environ['RESULT_URI'], '--output', 'benchmark-reference.json'])
           assert code == 0
           PY
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: always() && steps.raw.outcome == 'success'
         with:
           subject-path: |
