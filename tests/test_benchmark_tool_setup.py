@@ -74,6 +74,36 @@ def test_docker_readiness_probes_selected_image_without_network_or_credentials(t
     assert not {'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'AZURE_OPENAI_API_KEY'} & options['env'].keys()
 
 
+@pytest.mark.parametrize('ownership', ['matching', 'foreign-image', 'foreign-label'])
+def test_timed_out_docker_probe_cleans_only_verified_owned_container(tmp_path, monkeypatch, ownership):
+    image, container = 'sha256:' + 'a' * 64, 'c' * 64
+    calls = []
+    name = None
+    def run(command, **kwargs):
+        nonlocal name
+        calls.append(command)
+        if command[:2] == ['docker', 'run']:
+            assert '--name' in command and '--label' in command
+            name = command[command.index('--name') + 1]
+            assert '--network' in command and 'none' in command and '--read-only' in command
+            raise subprocess.TimeoutExpired(command, 30)
+        if command[:3] == ['docker', 'container', 'inspect']:
+            label = name if ownership != 'foreign-label' else 'someone-else'
+            observed_image = image if ownership != 'foreign-image' else 'sha256:' + 'b' * 64
+            return subprocess.CompletedProcess(command, 0, json.dumps([{
+                'Id': container, 'Image': observed_image,
+                'Config': {'Labels': {'agentops.tool-probe': label}},
+            }]), '')
+        return subprocess.CompletedProcess(command, 0, '', '')
+    monkeypatch.setattr(setup.subprocess, 'run', run)
+    result = setup.runtime('inspect', tmp_path, {'transport': 'docker', 'image': 'selected'}, image, refresh=True)
+    assert not result['available']
+    assert ['docker', 'container', 'inspect', name] in calls
+    assert (['docker', 'rm', '--force', container] in calls) is (ownership == 'matching')
+    assert not any(command[:2] in (['docker', 'commit'], ['docker', 'create']) for command in calls)
+    assert all('pip' not in str(command) for command in calls)
+
+
 def test_docker_setup_commits_only_success_and_cleans_owned_container(tmp_path, monkeypatch):
     calls = []
     image = 'sha256:' + 'a' * 64
@@ -189,7 +219,7 @@ def test_readiness_explicit_refresh_bypasses_false_cache(tmp_path, monkeypatch):
     assert not setup.runtime('aiperf', tmp_path, runner, image)['available']
     assert not setup.runtime('aiperf', tmp_path, runner, image)['available']
     assert setup.runtime('aiperf', tmp_path, runner, image, refresh=True)['available']
-    assert len(calls) == 2
+    assert len([command for command in calls if command[:2] == ['docker', 'run']]) == 2
 
 
 def test_ssh_discovers_managed_runtime_on_remote_host_without_install(tmp_path, monkeypatch):

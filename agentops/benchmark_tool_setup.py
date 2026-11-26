@@ -112,6 +112,30 @@ def _mapping(root):
         return {}
 
 
+def _docker_probe(tool, identity):
+    """A lost Docker CLI observation must not leave its probe container alive."""
+    name = 'headroom-tool-probe-' + uuid.uuid4().hex
+    try:
+        return _run([
+            'docker', 'run', '--rm', '--name', name, '--label', 'agentops.tool-probe=' + name,
+            '--pull', 'never', '--network', 'none', '--read-only',
+            '--cpus', '2', '--memory', '4g', '--pids-limit', '256',
+            '--entrypoint', 'python', identity, '-I', '-c', _probe_script(tool)])
+    finally:
+        # Inspect by the unique name even when docker run never returned its ID.
+        # Remove only the expected image and ownership label, by verified ID.
+        try:
+            observed = _run(['docker', 'container', 'inspect', name])
+            owned = json.loads(observed.stdout)[0] if observed.returncode == 0 else {}
+            container = owned.get('Id', '')
+            if (owned.get('Image') == identity and
+                    owned.get('Config', {}).get('Labels', {}).get('agentops.tool-probe') == name and
+                    re.fullmatch(r'[a-f0-9]{64}', container)):
+                _run(['docker', 'rm', '--force', container])
+        except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError):
+            pass  # An unobservable container never authorizes deleting a different one.
+
+
 def runtime(tool, root, runner, image_identity=None, refresh=False):
     """Probe the selected execution host; never install, pull or execute a benchmark."""
     transport = _validate(tool, runner)
@@ -130,10 +154,7 @@ def runtime(tool, root, runner, image_identity=None, refresh=False):
             result = tools.available(tool, {'python': python})
         elif transport == 'docker':
             identity = _image(runner, image_identity)
-            result = _probe_result(tool, _run([
-                'docker', 'run', '--rm', '--pull', 'never', '--network', 'none', '--read-only',
-                '--cpus', '2', '--memory', '4g', '--pids-limit', '256',
-                '--entrypoint', 'python', identity, '-I', '-c', _probe_script(tool)]), image_identity=identity)
+            result = _probe_result(tool, _docker_probe(tool, identity), image_identity=identity)
         else:
             managed = _mapping(root).get(_runner_key(runner), {}).get(tool, {})
             python = managed.get('python')
