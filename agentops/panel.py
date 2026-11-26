@@ -517,6 +517,15 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                 body = redact(json.dumps(priority.status(), ensure_ascii=False)).encode()
             elif url.path == '/api/maintenance':
                 body = redact(json.dumps(maintenance.status(), ensure_ascii=False)).encode()
+            elif url.path == '/api/maintenance/source':
+                if not secrets.compare_digest(self.headers.get('X-Launch-Token', ''), token):
+                    status, body = 403, b'{"error":"Dashboard token required for source evidence."}'
+                else:
+                    try:
+                        key = parse_qs(url.query).get('key', [''])[0]
+                        body = redact(json.dumps(maintenance.source_review(key), ensure_ascii=False)).encode()
+                    except (ValueError, KeyError):
+                        status, body = 400, b'{"error":"Source candidate unavailable. Refresh the incident."}'
             elif url.path == '/api/benchmarks':
                 try:
                     body = redact(json.dumps(benchmarks().status(), ensure_ascii=False, allow_nan=False)).encode()

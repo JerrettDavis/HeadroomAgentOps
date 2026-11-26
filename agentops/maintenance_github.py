@@ -2,6 +2,15 @@
 from urllib.parse import quote
 
 
+def pr_binding(raw, row, repo, heads):
+    return (raw.get('state') == 'open' and raw.get('number') == row['number']
+            and raw.get('base', {}).get('ref') == 'main'
+            and raw.get('base', {}).get('repo', {}).get('full_name', '').lower() == repo.lower()
+            and raw.get('head', {}).get('sha') in heads
+            and raw.get('head', {}).get('ref') == row['head_ref']
+            and raw.get('head', {}).get('repo', {}).get('full_name', '').lower() == (row.get('head_repo') or '').lower())
+
+
 def drift_inventory(github):
     main = github.main_sha()
     prs = []
@@ -14,6 +23,11 @@ def drift_inventory(github):
                'head_sha': head['sha'], 'head_ref': head['ref'],
                'head_repo': (head.get('repo') or {}).get('full_name'), 'main_sha': main,
                'repo': github.repo, 'behind': None, 'reason': ''}
+        row['conflict'] = ('conflicts' if raw.get('mergeable') is False else
+                           'clean' if raw.get('mergeable') is True else 'unknown')
+        permissions = (head.get('repo') or {}).get('permissions', {})
+        row['permission'] = ('allowed' if permissions.get('push') or raw.get('maintainer_can_modify') is True else
+                             'denied' if permissions.get('push') is False and not raw.get('maintainer_can_modify') else 'unknown')
         try:
             data = github.request('GET', f'repos/{github.repo}/compare/{head["sha"]}...{main}')
             behind = data.get('ahead_by')
@@ -34,15 +48,19 @@ def workflow_runs(github, sha, branch=None):
     return github.pages(endpoint, 'workflow_runs')
 
 
-def main_health(sha, runs):
+def main_health(sha, runs, repo=None):
     latest = {}
     for run in runs:
         if run.get('head_sha') != sha or run.get('head_branch') != 'main':
             continue
-        identity = run.get('workflow_id', run.get('path', run['id']))
+        if run.get('event') not in ('push', 'schedule', 'workflow_dispatch'):
+            continue
+        if repo and run.get('repository', {}).get('full_name', '').lower() != repo.lower():
+            continue
+        identity = str(run.get('workflow_id', run.get('path', run['id']))) + ':' + run['event']
         order = (run.get('run_number', run['id']), run.get('run_attempt', 1), run['id'])
         if identity not in latest or order > latest[identity][0]:
-            latest[identity] = (order, run)
+            latest[identity] = (order, {**run, 'context_key': identity})
     current = [item[1] for item in latest.values()]
     failures = [r for r in current if r.get('conclusion') in ('failure', 'timed_out', 'startup_failure')]
     approval = [r for r in current if r.get('conclusion') == 'action_required' or r.get('status') == 'action_required']

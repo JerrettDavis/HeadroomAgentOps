@@ -11,6 +11,15 @@ from agentops.launch import Launcher
 from agentops.ledger import Ledger
 
 
+def test_reload_rejects_active_maintenance_even_without_review_workers(state):
+    from agentops.maintenance_store import MaintenanceStore
+    root = state[0] if isinstance(state, tuple) else state['root']
+    store = MaintenanceStore(root / 'ledger.sqlite3', 'o/r')
+    store.put('repair', 'main', {'state': 'agent_running', 'task': 'main'})
+    with pytest.raises(ValueError, match='maintenance'):
+        reload.capture(root, 'o/r')
+
+
 @pytest.fixture
 def state(tmp_path, monkeypatch):
     root = tmp_path / 'state'

@@ -133,6 +133,14 @@ def _database_locked(root):
 
 
 def _snapshot(connection, repo):
+    state_root = Path(connection.execute('PRAGMA database_list').fetchone()[2]).parent
+    maintenance_path = state_root / 'maintenance.sqlite3'
+    if maintenance_path.exists():
+        with contextlib.closing(sqlite3.connect(maintenance_path, timeout=30)) as maintenance:
+            records = maintenance.execute("SELECT body FROM records WHERE kind IN ('update','repair')").fetchall()
+        if any(json.loads(record[0]).get('state') in
+               ('queued', 'agent_queued', 'running', 'publishing', 'agent_running') for record in records):
+            raise ValueError('Reload requires zero active maintenance operations')
     if connection.execute("SELECT count(*) FROM jobs WHERE state IN ('running','starting')").fetchone()[0]:
         raise ValueError('Reload requires zero active jobs')
     rows = [dict(row) for row in connection.execute("SELECT id,run_id,repo,number,head_sha,main_sha,state,stale "

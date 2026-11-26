@@ -40,11 +40,21 @@ class MaintenanceGithubTests(unittest.TestCase):
                  'run_number': 1, 'run_attempt': 2, 'status': 'completed', 'conclusion': 'success'},
                 {'id': 2, 'workflow_id': 11, 'head_sha': 'other', 'head_branch': 'main',
                  'status': 'completed', 'conclusion': 'failure'}]
+        for run in runs:
+            run.setdefault('event', 'push')
         self.assertEqual(main_health('main', runs)['state'], 'healthy')
         runs.append({'id': 3, 'workflow_id': 12, 'head_sha': 'main', 'head_branch': 'main',
-                     'status': 'completed', 'conclusion': 'failure'})
+                     'event': 'push', 'status': 'completed', 'conclusion': 'failure'})
         self.assertEqual(main_health('main', runs)['state'], 'broken')
         self.assertEqual(main_health('new-main', runs)['state'], 'pending')
+
+    def test_pull_request_run_cannot_mask_failing_main_push(self):
+        from agentops.maintenance_github import main_health
+        runs = [{'id': 1, 'workflow_id': 10, 'head_sha': 'main', 'head_branch': 'main',
+                 'event': 'push', 'status': 'completed', 'conclusion': 'failure'},
+                {'id': 2, 'workflow_id': 10, 'head_sha': 'main', 'head_branch': 'main',
+                 'event': 'pull_request', 'status': 'completed', 'conclusion': 'success'}]
+        self.assertEqual(main_health('main', runs)['state'], 'broken')
 
 
 if __name__ == '__main__':

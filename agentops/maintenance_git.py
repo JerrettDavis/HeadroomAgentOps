@@ -88,6 +88,8 @@ class MaintenanceGit(GitStack):
         current = observed.split()[0] if observed else None
         if current == new:
             return {'new_head': new, 'reconciled': True}
+        if record.get('reconcile_only'):
+            raise ValueError('Publication outcome is ambiguous; remote branch does not match the observed receipt')
         if current != old:
             raise ValueError('PR head changed; lease rejected')
         self.git(['push', f'--force-with-lease=refs/heads/{branch}:{old}', '--', remote,

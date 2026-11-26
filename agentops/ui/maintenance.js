@@ -5,6 +5,7 @@
   const selected = new Set(), secondary = new Set();
   let data = null, busy = false, polling = false, view = 'updates', signature = '';
   let token = null, message = '';
+  try { if (localStorage.getItem('agentops-view') === 'main-ci') view = 'main-ci'; } catch {}
   const el = (tag, value, cls) => {
     const item = document.createElement(tag);
     if (value !== undefined) item.textContent = value;
@@ -46,7 +47,12 @@
     finally { busy = false; render(true); }
   }
   function render(force = false) {
-    if (!data) return;
+    if (!data) {
+      const status = el('p', message || 'Loading maintenance status…', 'maintenance-status');
+      status.setAttribute('role', 'status');
+      root.replaceChildren(el('h1', view === 'updates' ? 'PR updates' : 'Main CI'), status);
+      return;
+    }
     const alert = document.getElementById('main-ci-alert');
     alert.hidden = !data.alert;
     const current = JSON.stringify([data, view, busy, message, [...selected], [...secondary]]);
@@ -83,6 +89,8 @@
       const body = el('div', undefined, 'maintenance-body');
       body.append(link(row.url, `#${row.number} ${row.title}`),
         el('small', `${row.author || ''} · ${row.head_repo || 'Unavailable fork'}:${row.head_ref || ''}`),
+        el('small', `Conflicts: ${row.conflict || 'unknown'} · Permission: ${row.permission || 'unknown'}` +
+          (row.excluded ? ' · Author excluded' : '') + (row.last_update ? ` · Last update: ${row.last_update}` : '')),
         el('small', row.reason || ''));
       item.append(check, body, el('span', row.behind == null ? 'Unknown drift' : `${row.behind} behind`, 'maintenance-state'));
       list.append(item);
@@ -91,9 +99,10 @@
     root.append(list, el('h2', 'Needs remediation'));
     const queue = el('div', undefined, 'maintenance-card');
     const queueKeys = new Set((data.secondary || []).map(row => row.key));
+    const agentKeys = (data.secondary || []).filter(row => row.state !== 'source_held').map(row => row.key);
     for (const k of [...secondary]) if (!queueKeys.has(k)) secondary.delete(k);
     const queueTools = el('div', undefined, 'maintenance-toolbar');
-    queueTools.append(button('Select all remediation entries', () => { queueKeys.forEach(k => secondary.add(k)); render(true); }, !queueKeys.size),
+    queueTools.append(button('Select all remediation entries', () => { agentKeys.forEach(k => secondary.add(k)); render(true); }, !agentKeys.length),
       button('Clear remediation selection', () => { secondary.clear(); render(true); }, !secondary.size),
       button('Send selected to agent', () => post('remediate', {keys: [...secondary]}), !secondary.size));
     queue.append(queueTools);
@@ -102,7 +111,7 @@
       body.append(el('strong', `#${row.number}`), el('span', row.reason || row.state));
       item.append(checkbox(`Remediate PR #${row.number}`, secondary.has(row.key), checked => {
         checked ? secondary.add(row.key) : secondary.delete(row.key); render(true);
-      }), body, button(`Retry PR #${row.number}`, () => post('retry', {key: row.key})));
+      }, row.state === 'source_held'), body, button(`Retry PR #${row.number}`, () => post('retry', {key: row.key}), row.state === 'source_held'));
       queue.append(item);
     }
     if (!queueKeys.size) queue.append(el('p', 'No updates need remediation.'));
@@ -137,13 +146,40 @@
         const p = el('p'); p.append(link(run.html_url, `${run.name || 'Workflow'}: ${run.conclusion || run.status}`)); item.append(p);
       }
       if (incident.pr) item.append(link(incident.pr.html_url, `Review repair PR #${incident.pr.number}`));
-      else if (incident.state !== 'resolved') item.append(button(incident.repair_state === 'agent_failed' ? 'Retry main repair' : 'Fix main',
-        () => post('fix-main', {key: incident.key, retry: incident.repair_state === 'agent_failed'}),
+      else if (incident.state === 'approval_needed') item.append(el('p', 'Approve the observed workflow on GitHub; a code fix is not needed.'));
+      else if (incident.repair_state === 'source_held') item.append(button('Review protected source repair', () => reviewSource(incident)));
+      else if (incident.state !== 'resolved') item.append(button(['agent_failed','interrupted','publication_unknown'].includes(incident.repair_state) ? 'Retry main repair' : 'Fix main',
+        () => post('fix-main', {key: incident.key, retry: ['agent_failed', 'interrupted','publication_unknown'].includes(incident.repair_state)}),
         ['agent_queued', 'agent_running'].includes(incident.repair_state)));
       item.append(el('p', incident.summary || incident.reason || incident.repair_state || ''));
       root.append(item);
     }
     if (!(data.incidents || []).length) root.append(el('p', 'No recorded main CI failures.'));
+  }
+  async function reviewSource(incident) {
+    try {
+      if (!token) {
+        const r = await fetch('/api/launcher'); if (!r.ok) throw Error('Dashboard connection unavailable');
+        token = (await r.json()).token;
+      }
+      const r = await fetch('/api/maintenance/source?key=' + encodeURIComponent(incident.key),
+        {headers: {'X-Launch-Token': token}});
+      const evidence = await r.json(); if (!r.ok) throw Error(evidence.error || 'Source evidence unavailable');
+      const dialog = el('dialog', undefined, 'maintenance-source-dialog');
+      dialog.setAttribute('aria-label', 'Review protected main source repair');
+      const diff = el('pre', evidence.diff);
+      const close = button('Close source review', () => dialog.close());
+      const publish = button('Publish this reviewed source repair', () => {
+        dialog.close(); post('authorize-source', {key: incident.key, candidate: evidence.candidate,
+                                                source_manifest: evidence.source_manifest});
+      }, evidence.truncated);
+      dialog.append(el('h2', 'Review protected main source repair'),
+        el('p', evidence.summary), el('p', `Candidate ${evidence.candidate}`),
+        el('p', 'Publication can start GitHub Actions from this source. Review the diff and validation before authorizing.'),
+        el('p', 'Validation: ' + (evidence.validation || []).join('; ')), diff, close, publish);
+      document.body.append(dialog); dialog.addEventListener('close', () => dialog.remove(), {once: true});
+      dialog.showModal(); close.focus();
+    } catch (error) { message = error.message; render(true); }
   }
   async function poll() {
     if (polling || busy) return;
@@ -152,13 +188,18 @@
       const r = await fetch('/api/maintenance', {signal: AbortSignal.timeout(15000)});
       if (!r.ok) throw Error('Maintenance status unavailable');
       data = await r.json(); render();
-    } catch { message = 'Maintenance status unavailable. Saved operations are retained.'; render(true); }
+    } catch {
+      message = 'Maintenance status unavailable. Saved operations are retained.';
+      if (data) data = {...data, fresh: false, inventory: {...data.inventory, error: message}};
+      render(true);
+    }
     finally { polling = false; }
   }
   document.getElementById('main-ci-open').onclick = () => window.agentopsSelectView('main-ci');
   document.addEventListener('agentops-view', event => {
     if (!['updates', 'main-ci'].includes(event.detail.view)) return;
-    view = event.detail.view; render(true); poll();
+    view = event.detail.view; render(true);
+    poll().then(() => { if (view === 'updates' && data && !data.inventory?.fetched) post('refresh', {}); });
   });
   poll(); setInterval(() => { if (!document.hidden) poll(); }, 5000);
 })();

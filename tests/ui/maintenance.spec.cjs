@@ -52,4 +52,39 @@ test('main CI alert opens monitor and autofix persists without extra alert', asy
   await page.getByRole('checkbox', {name: 'Autofix main CI'}).check();
   await expect(page.getByRole('alert').filter({hasText: 'Main CI needs attention'})).toBeHidden();
   await expect(page.getByRole('checkbox', {name: 'Autofix main CI'})).toBeChecked();
+  await page.reload();
+  await expect(page.getByRole('heading', {name: 'Main CI', exact: true})).toBeVisible();
+  await expect(page.getByRole('checkbox', {name: 'Autofix main CI'})).toBeChecked();
+});
+
+test('first-load maintenance error remains visible and never enables updates', async ({page}) => {
+  await page.route('**/api/maintenance**', route => route.fulfill({status: 503, json: {error: 'offline'}}));
+  await page.goto('/');
+  await page.getByRole('button', {name: 'PR updates', exact: true}).click();
+  await expect(page.locator('#maintenance-view').getByRole('status')).toContainText('Maintenance status unavailable');
+});
+
+test('protected main source repair shows exact diff before candidate authorization', async ({page}) => {
+  const data = status();
+  data.incidents[0].repair_state = 'source_held';
+  data.incidents[0].candidate = 'b'.repeat(40);
+  data.incidents[0].source_manifest = 'c'.repeat(64);
+  let authorization;
+  await page.route('**/api/maintenance**', async route => {
+    if (route.request().url().includes('/source?')) {
+      await route.fulfill({json: {candidate: 'b'.repeat(40), source_manifest: 'c'.repeat(64),
+        diff: 'diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n-old\n+fixed',
+        summary: 'Repair workflow configuration', validation: ['python3 -m unittest']}}); return;
+    }
+    if (route.request().url().endsWith('/authorize-source')) authorization = route.request().postDataJSON();
+    await route.fulfill({json: data});
+  });
+  await page.goto('/');
+  await page.getByRole('button', {name: 'Main CI', exact: true}).click();
+  await page.getByRole('button', {name: 'Review protected source repair'}).click();
+  const dialog = page.getByRole('dialog', {name: 'Review protected main source repair'});
+  await expect(dialog).toContainText('+fixed');
+  await dialog.getByRole('button', {name: 'Publish this reviewed source repair'}).click();
+  await expect.poll(() => authorization?.candidate).toBe('b'.repeat(40));
+  await expect.poll(() => authorization?.source_manifest).toBe('c'.repeat(64));
 });

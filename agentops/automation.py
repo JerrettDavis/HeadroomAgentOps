@@ -114,9 +114,6 @@ class AutoReview:
                         proof['head_sha'] != job['head_sha'] or
                         previous['head_sha'] != job['head_sha']):
                     continue
-                if unpublished_revision(proof, pr['head_sha'], main_sha, job.get('main_sha')):
-                    return {'material': True, 'reason': 'unpublished_approval_requires_qualification',
-                            'source_job': job['id']}
                 current = None
                 if (previous.get('updated_at') and pr.get('updated_at') and
                         previous['updated_at'] != pr['updated_at']):
@@ -135,6 +132,9 @@ class AutoReview:
                               'source_job': job['id'], 'scope': 'scheduling_only_no_approval'}
                     notes[str(pr['number'])] = {**record, 'evidence': evidence.put(record)}
                     return record
+                if unpublished_revision(proof, pr['head_sha'], main_sha, job.get('main_sha')):
+                    return {'material': True, 'reason': 'unpublished_approval_requires_qualification',
+                            'source_job': job['id']}
                 if (previous['head_sha'] == pr['head_sha'] and
                         isinstance(previous.get('files'), list) and pr.get('base_ref') and
                         previous.get('base_ref') == pr['base_ref'] and pr.get('head_repo') and
