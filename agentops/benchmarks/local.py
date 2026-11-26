@@ -317,6 +317,30 @@ class LocalAdapter:
                 "agent": agent_identity(),
             }
 
+    def load_batch(self, experiment, task, arm, *, concurrency, requests):
+        """One bounded genuine AIPerf batch through one attested native arm."""
+        from .load import run
+
+        before_environment = describe_environment(self.python)
+        with self.runtime(experiment, arm) as (request, before):
+            result = run(request, self.config.get("protocol", "openai"),
+                         self.config.get("request_model", experiment["model"]), task,
+                         Path(self.config.get("tool_artifacts_dir", self.workspace)),
+                         self.config, concurrency=concurrency, requests=requests)
+            after = observe_runtime(request)
+            if before != after or before_environment != describe_environment(self.python):
+                raise ValueError("runtime identity changed during load batch")
+        for observation in result["attempts"]:
+            identity = expected_identity(experiment)
+            identity.update({key: before[key] for key in (
+                "rollout_registry_digest", "rollout_snapshot_digest")})
+            identity["environment"] = before_environment
+            identity["agent"] = agent_identity()
+            identity["model"] = observation.pop("response_model")
+            observation.update(identity=identity,
+                               optimization_enabled=before["optimization_enabled"])
+        return result
+
     def attempt(self, experiment, task, arm):
         before_environment = describe_environment(self.python)
         with self.runtime(experiment, arm) as (request, before):

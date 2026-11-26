@@ -135,3 +135,30 @@ def test_expected_output_is_scored_from_actual_response(tmp_path, monkeypatch):
     assert observation['response_model'] == 'actual'
     assert observation['success'] is False
     assert observation['latency_ms'] >= 0
+
+@pytest.mark.parametrize('changed', [False, True])
+def test_local_load_batch_attests_each_actual_observation(tmp_path, monkeypatch, changed):
+    from contextlib import contextmanager
+    from agentops.benchmarks import local
+    adapter = local.LocalAdapter.__new__(local.LocalAdapter)
+    adapter.python, adapter.workspace, adapter.config = 'python', tmp_path, {}
+    runtime = {'rollout_registry_digest':'registry','rollout_snapshot_digest':'snapshot','optimization_enabled':True}
+    @contextmanager
+    def context(experiment, arm):
+        yield lambda *a: None, runtime
+    adapter.runtime = context
+    monkeypatch.setattr(local, 'describe_environment', lambda *a: {'environment':'exact'})
+    monkeypatch.setattr(local, 'agent_identity', lambda: {'agent':'exact'})
+    monkeypatch.setattr(local, 'expected_identity', lambda *a: {'model':'expected'})
+    monkeypatch.setattr(local, 'observe_runtime', lambda *a: dict(runtime, optimization_enabled=False) if changed else runtime)
+    monkeypatch.setattr(load, 'run', lambda *a, **kw: {'attempts':[{'response_model':'actual','tokens':2,'success':True}]})
+    if changed:
+        with pytest.raises(ValueError, match='identity changed'):
+            adapter.load_batch({'model':'expected'}, {}, 'candidate', concurrency=2, requests=4)
+    else:
+        batch = adapter.load_batch({'model':'expected'}, {}, 'candidate', concurrency=2, requests=4)
+        observation = batch['attempts'][0]
+        assert observation['identity']['model'] == 'actual'
+        assert observation['identity']['rollout_registry_digest'] == 'registry'
+        assert observation['identity']['environment'] == {'environment':'exact'}
+        assert observation['optimization_enabled'] is True
