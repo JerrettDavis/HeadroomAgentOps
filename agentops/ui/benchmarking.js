@@ -34,12 +34,12 @@
   };
   const controls = document.createElement('div');
   controls.className = 'benchmark-help-controls';
-  controls.innerHTML = `<button type="button" data-guide-open aria-label="Benchmark help and guided tutorial"><span aria-hidden="true">?</span> Guided setup</button><label><input type="checkbox" data-help-toggle> Show help</label>`;
+  controls.innerHTML = `<button type="button" class="benchmark-guide-trigger" data-guide-open aria-label="Benchmark help and guided tutorial" title="Guided setup"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m16 8-2.5 5.5L8 16l2.5-5.5L16 8Z"/></svg><span>Guided setup</span></button><button type="button" class="icon-button benchmark-help-toggle" data-help-toggle aria-label="Show help" aria-pressed="true" title="Show field help"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2-3 4"/><path d="M12 17h.01"/></svg></button>`;
   root.querySelector('.benchmark-heading').append(controls);
   let helpEnabled = true;
   try { helpEnabled = localStorage.getItem('agentops.benchmark.help') !== 'off'; } catch {}
   const helpToggle = controls.querySelector('[data-help-toggle]');
-  helpToggle.checked = helpEnabled;
+  helpToggle.setAttribute('aria-pressed', String(helpEnabled));
   let activeHelp = null;
   let activeHelpField = null;
   let helpDismissTimer;
@@ -51,7 +51,7 @@
   }
   function showHelp(input, hint) {
     clearTimeout(helpDismissTimer);
-    if (!helpToggle.checked || !input.getClientRects().length) return;
+    if (!helpEnabled || guideActive || !input.getClientRects().length) return;
     if (activeHelp !== hint) { hideHelp(); hint.showPopover(); activeHelp = hint; }
     activeHelpField = input.closest('.benchmark-field') || input.parentElement;
     const anchor = input.getBoundingClientRect();
@@ -91,9 +91,11 @@
     hint.addEventListener('pointerleave', deferHideHelp);
   });
   helpToggle.title = 'Show floating help when you hover or focus a field';
-  helpToggle.addEventListener('change', () => {
+  helpToggle.addEventListener('click', () => {
+    helpEnabled = !helpEnabled;
+    helpToggle.setAttribute('aria-pressed', String(helpEnabled));
     hideHelp();
-    try { localStorage.setItem('agentops.benchmark.help', helpToggle.checked ? 'on' : 'off'); } catch {}
+    try { localStorage.setItem('agentops.benchmark.help', helpEnabled ? 'on' : 'off'); } catch {}
   });
   document.addEventListener('keydown', event => { if (event.key === 'Escape') hideHelp(); });
   document.addEventListener('scroll', hideHelp, true);
@@ -105,31 +107,156 @@
     ['Run the comparison', 'Select the saved experiment and the same candidate wheel. Choose where to run it, then select Run experiment. This can send requests to the configured model provider and incur usage charges. Jobs below show progress; you can cancel active work.', 'run'],
     ['Read the results', 'After the run completes, read its decision and metrics in Benchmark jobs. A completed job alone does not mean the candidate passed: check the decision and any errors. Simulator results are labeled and do not establish measured provider performance. Copy saved artifact paths to examine the evidence or reuse the experiment.', null]
   ];
-  const guide = document.createElement('dialog');
+  const guide = document.createElement('div');
   guide.className = 'benchmark-guide';
+  guide.setAttribute('popover', 'manual');
+  guide.setAttribute('role', 'dialog');
+  guide.setAttribute('aria-modal', 'false');
   guide.setAttribute('aria-labelledby', 'benchmark-guide-title');
-  guide.innerHTML = `<div class="benchmark-heading"><h3 id="benchmark-guide-title">Benchmark guide</h3><button type="button" data-guide-close aria-label="Close benchmark guide">Close</button></div><p data-guide-progress class="muted"></p><div aria-live="polite"><h4 data-guide-heading></h4><p data-guide-copy></p></div><div class="benchmark-guide-actions"><button type="button" data-guide-back>Back</button><button type="button" data-guide-go>Go to this step</button><button type="button" data-guide-next>Next</button></div>`;
+  guide.innerHTML = `<div class="benchmark-heading"><h3 id="benchmark-guide-title">Benchmark guide</h3><button type="button" data-guide-close aria-label="Close benchmark guide">Close</button></div><p data-guide-progress class="muted"></p><div data-guide-content aria-live="polite"><h4 data-guide-heading></h4><p data-guide-copy></p></div><p data-guide-status role="status" class="muted"></p><div class="benchmark-guide-actions"><button type="button" data-guide-back>Back</button><button type="button" data-guide-go>Go to this step</button><button type="button" data-guide-next>Next</button></div>`;
   document.body.append(guide);
   let guideStep = 0;
+  let guideActive = false;
+  let guideFrame;
+  const originalGuideViewport = {height: root.style.height, maxHeight: root.style.maxHeight, minHeight: root.style.minHeight};
+  function restoreGuideViewport() {
+    Object.assign(root.style, originalGuideViewport);
+    root.classList.remove('benchmark-tour-docked');
+  }
+  function guideTarget() {
+    const action = steps[guideStep][2];
+    return action ? root.querySelector(`form[data-action="${action}"]`) : root.querySelector('#benchmark-jobs');
+  }
+  function positionGuide() {
+    if (!guide.matches(':popover-open')) return;
+    const focusedForm = root.contains(document.activeElement) ? document.activeElement.closest('form') : null;
+    const target = focusedForm || guideTarget();
+    const viewport = window.visualViewport;
+    const width = viewport?.width || window.innerWidth;
+    const height = viewport?.height || window.innerHeight;
+    const originX = viewport?.offsetLeft || 0;
+    const originY = viewport?.offsetTop || 0;
+    const edge = 12, gap = 12;
+    if (width < 760) {
+      guide.style.width = `${width - edge * 2}px`;
+      guide.style.maxHeight = `${Math.max(140, Math.min(320, height * .4))}px`;
+      const dock = guide.getBoundingClientRect();
+      const top = originY + height - dock.height - edge;
+      guide.style.left = `${originX + edge}px`;
+      guide.style.top = `${top}px`;
+      root.classList.add('benchmark-tour-docked');
+      const available = Math.max(80, top - Math.max(originY, root.getBoundingClientRect().top) - gap);
+      root.style.height = `${available}px`;
+      root.style.maxHeight = `${available}px`;
+      root.style.minHeight = '0';
+      if (target.contains(document.activeElement)) {
+        const focused = document.activeElement.getBoundingClientRect();
+        const region = root.getBoundingClientRect();
+        if (focused.bottom > region.bottom - gap) root.scrollTop += focused.bottom - region.bottom + gap;
+        else if (focused.top < region.top + gap) root.scrollTop -= region.top + gap - focused.top;
+      }
+      return;
+    }
+    restoreGuideViewport();
+    const region = target.getBoundingClientRect();
+    const focused = target.contains(document.activeElement) ? document.activeElement : null;
+    const visibleField = [...target.querySelectorAll('input, select, button')].find(el => {
+      const r = el.getBoundingClientRect(); return r.height && r.top >= originY && r.bottom <= originY + height;
+    });
+    const anchor = (focused || visibleField || target).getBoundingClientRect();
+    guide.style.width = `${Math.min(340, width - edge * 2)}px`;
+    guide.style.maxHeight = `${height - edge * 2}px`;
+    const box = guide.getBoundingClientRect();
+    let left, top;
+    if (region.right + gap + box.width <= originX + width - edge) {
+      left = region.right + gap;
+      top = Math.max(originY + edge, Math.min(anchor.top, originY + height - box.height - edge));
+    } else if (region.left - gap - box.width >= originX + edge) {
+      left = region.left - gap - box.width;
+      top = Math.max(originY + edge, Math.min(anchor.top, originY + height - box.height - edge));
+    } else {
+      left = Math.max(originX + edge, Math.min(anchor.left, originX + width - box.width - edge));
+      const above = Math.max(0, Math.min(height - edge * 2, anchor.top - originY - gap - edge));
+      const below = Math.max(0, Math.min(height - edge * 2, originY + height - anchor.bottom - gap - edge));
+      const useAbove = above >= box.height || above > below;
+      const available = useAbove ? above : below;
+      guide.style.maxHeight = `${Math.max(48, available)}px`;
+      const actualHeight = guide.getBoundingClientRect().height;
+      top = useAbove ? anchor.top - gap - actualHeight : anchor.bottom + gap;
+      top = Math.max(originY + edge, Math.min(top, originY + height - actualHeight - edge));
+    }
+    guide.style.left = `${left}px`;
+    guide.style.top = `${top}px`;
+  }
+  function scheduleGuidePosition() {
+    cancelAnimationFrame(guideFrame);
+    guideFrame = requestAnimationFrame(positionGuide);
+  }
+  function updateGuideStatus() {
+    if (!guideActive) return;
+    const action = steps[guideStep][2];
+    const job = jobs.find(item => item.action === (action || 'run'));
+    const message = guide.querySelector('[data-guide-status]');
+    const next = action === 'inspect' ? 'Create experiment' : action === 'create' ? 'Run experiment' : 'Read the results';
+    message.textContent = guideStep === 0 ? 'Keep this guide open while you work. Click Next when your files are ready.'
+      : job ? `${action || 'run'} job: ${job.state}.${job.state === 'completed' ? ` Continue to ${next} when ready.` : ' Follow its progress in Benchmark jobs; you can keep using the forms.'}`
+      : 'Complete the highlighted form, or click Next if you already have its saved output.';
+    scheduleGuidePosition();
+  }
   function renderGuide() {
     guide.querySelector('[data-guide-progress]').textContent = `Step ${guideStep + 1} of ${steps.length}`;
     guide.querySelector('[data-guide-heading]').textContent = steps[guideStep][0];
     guide.querySelector('[data-guide-copy]').textContent = steps[guideStep][1];
     guide.querySelector('[data-guide-back]').disabled = guideStep === 0;
     guide.querySelector('[data-guide-next]').textContent = guideStep === steps.length - 1 ? 'Finish' : 'Next';
+    root.querySelectorAll('.benchmark-tour-target').forEach(el => el.classList.remove('benchmark-tour-target'));
+    guideTarget().classList.add('benchmark-tour-target');
+    updateGuideStatus();
   }
-  controls.querySelector('[data-guide-open]').addEventListener('click', () => { hideHelp(); guideStep = 0; renderGuide(); guide.showModal(); });
-  guide.querySelector('[data-guide-close]').addEventListener('click', () => guide.close());
-  guide.querySelector('[data-guide-back]').addEventListener('click', () => { if (guideStep > 0) guideStep--; renderGuide(); });
-  guide.querySelector('[data-guide-next]').addEventListener('click', () => { if (guideStep === steps.length - 1) guide.close(); else { guideStep++; renderGuide(); } });
-  guide.querySelector('[data-guide-go]').addEventListener('click', () => {
-    const action = steps[guideStep][2];
-    guide.close();
-    const target = action ? root.querySelector(`form[data-action="${action}"]`) : root.querySelector('#benchmark-jobs');
-    target.scrollIntoView({block: 'center'});
+  function closeGuide() {
+    guideActive = false;
+    restoreGuideViewport();
+    if (guide.matches(':popover-open')) guide.hidePopover();
+    root.querySelectorAll('.benchmark-tour-target').forEach(el => el.classList.remove('benchmark-tour-target'));
+    controls.querySelector('[data-guide-open]').focus({preventScroll: true});
+  }
+  function focusGuideTarget() {
+    const target = guideTarget();
+    root.scrollTop += target.getBoundingClientRect().top - root.getBoundingClientRect().top - 12;
     const focusTarget = target.querySelector('input, select, button') || target;
     if (focusTarget === target) target.setAttribute('tabindex', '-1');
     focusTarget.focus({preventScroll: true});
+    positionGuide();
+  }
+  controls.querySelector('[data-guide-open]').addEventListener('click', () => {
+    hideHelp();
+    if (guideActive) { guide.querySelector('[data-guide-next]').focus(); return; }
+    guideActive = true;
+    guideStep = 0;
+    guide.showPopover();
+    renderGuide();
+    positionGuide();
+  });
+  guide.querySelector('[data-guide-close]').addEventListener('click', closeGuide);
+  guide.querySelector('[data-guide-back]').addEventListener('click', () => {
+    if (guideStep > 0) guideStep--;
+    renderGuide(); focusGuideTarget();
+  });
+  guide.querySelector('[data-guide-next]').addEventListener('click', () => {
+    if (guideStep === steps.length - 1) closeGuide();
+    else { guideStep++; renderGuide(); focusGuideTarget(); }
+  });
+  guide.querySelector('[data-guide-go]').addEventListener('click', focusGuideTarget);
+  root.addEventListener('focusin', () => { if (guideActive) { hideHelp(); scheduleGuidePosition(); } });
+  document.addEventListener('scroll', scheduleGuidePosition, true);
+  window.addEventListener('resize', scheduleGuidePosition);
+  window.visualViewport?.addEventListener('resize', scheduleGuidePosition);
+  window.visualViewport?.addEventListener('scroll', scheduleGuidePosition);
+  new ResizeObserver(scheduleGuidePosition).observe(guide);
+  document.addEventListener('agentops-view', () => {
+    if (!guideActive) return;
+    if (root.hidden) { restoreGuideViewport(); if (guide.matches(':popover-open')) guide.hidePopover(); }
+    else { if (!guide.matches(':popover-open')) guide.showPopover(); scheduleGuidePosition(); }
   });
 
   const status = root.querySelector('#benchmark-status');
@@ -203,6 +330,7 @@
       select.innerHTML = first + jobs.filter(job => job.action === select.dataset.jobOptions && job.state === 'completed').map(job => `<option value="${esc(job.id)}">${esc(job.id)}</option>`).join('');
       if ([...select.options].some(option => option.value === selected)) select.value = selected;
     });
+    updateGuideStatus();
   }
   async function refresh() {
     if (loading) return;

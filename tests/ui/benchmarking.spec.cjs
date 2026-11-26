@@ -148,16 +148,16 @@ test('every file path uses the authenticated filesystem picker with folder navig
 
 test('help persists and tutorial navigates without launching jobs', async ({page}) => {
   const state = await fixture(page);
-  const help = page.getByRole('checkbox', {name:'Show help'});
-  await expect(help).toBeChecked();
+  const help = page.getByRole('button', {name:'Show help',exact:true});
+  await expect(help).toHaveAttribute('aria-pressed','true');
   await page.screenshot({path:'../../.agentops/benchmark-help-desktop.png',fullPage:true});
   await page.locator('form[data-action="inspect"] input[name="artifact"]').focus();
   await expect(page.locator('.benchmark-field-help').first()).toBeVisible();
-  await help.uncheck();
+  await help.click();
   await expect(page.locator('.benchmark-field-help').first()).toBeHidden();
   await page.reload();
   await page.getByRole('button', {name:'Benchmarking',exact:true}).click();
-  await expect(help).not.toBeChecked();
+  await expect(help).toHaveAttribute('aria-pressed','false');
   const open = page.getByRole('button', {name:'Benchmark help and guided tutorial'});
   await open.click();
   const guide = page.getByRole('dialog', {name:'Benchmark guide',exact:true});
@@ -173,6 +173,8 @@ test('help persists and tutorial navigates without launching jobs', async ({page
   await expect(page.locator('form[data-action="create"] select').first()).toBeFocused();
   await open.click();
   await page.keyboard.press('Escape');
+  await expect(guide).toBeVisible();
+  await guide.getByRole('button', {name:'Close benchmark guide'}).click();
   await expect(guide).not.toBeVisible();
   await expect(open).toBeFocused();
   await open.click();
@@ -180,7 +182,7 @@ test('help persists and tutorial navigates without launching jobs', async ({page
   await expect(guide).toContainText('Simulator results');
   await guide.getByRole('button', {name:'Finish',exact:true}).click();
   expect(state.posts).toHaveLength(0);
-  await help.check();
+  await help.click();
   await page.locator('form[data-action="inspect"] input[name="artifact"]').focus();
   await expect(page.locator('.benchmark-field-help').first()).toBeVisible();
 });
@@ -190,15 +192,15 @@ for (const width of [1280, 390]) {
   test(`help never changes existing form geometry at ${width}px`, async ({page}) => {
     await page.setViewportSize({width,height:900});
     await fixture(page);
-    const toggle=page.getByRole('checkbox',{name:'Show help'});
-    await toggle.uncheck();
+    const toggle=page.getByRole('button',{name:'Show help',exact:true});
+    await toggle.click();
     const geometry=()=>page.locator('#benchmark-view').evaluate(root=>
       [...root.querySelectorAll('form, form label, form input, form select, form button')]
         .filter(el=>el.getClientRects().length).map(el=>{
           const r=el.getBoundingClientRect();return [r.x,r.y,r.width,r.height];
         }));
     const before=await geometry();
-    await toggle.check();
+    await toggle.click();
     expect(await geometry()).toEqual(before);
     const field=page.locator('form[data-action="inspect"] input[name="artifact"]');
     await field.focus();
@@ -211,7 +213,7 @@ for (const width of [1280, 390]) {
     expect(bounds.x+bounds.width).toBeLessThanOrEqual(width);
     await page.keyboard.press('Escape');
     await expect(hint).toBeHidden();
-    await toggle.uncheck();
+    await toggle.click();
     expect(await geometry()).toEqual(before);
   });
 }
@@ -226,9 +228,105 @@ test('floating help stays open for focus or hover and dismisses on Escape', asyn
   await page.waitForTimeout(250);
   await expect(hint).toBeVisible();
   await field.hover();
-  await page.getByRole('checkbox',{name:'Show help'}).focus();
+  await page.getByRole('button',{name:'Show help',exact:true}).focus();
   await page.waitForTimeout(250);
   await expect(hint).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(hint).toBeHidden();
+});
+
+
+test('help icon has a stable pressed state and supports keyboard toggling', async ({page}) => {
+  await fixture(page);
+  const help=page.getByRole('button',{name:'Show help',exact:true});
+  await expect(help).toHaveAttribute('aria-pressed','true');
+  await expect(help.locator('svg')).toHaveAttribute('aria-hidden','true');
+  const size=await help.boundingBox();
+  await help.focus();
+  await page.keyboard.press('Space');
+  await expect(help).toHaveAttribute('aria-pressed','false');
+  expect(await help.boundingBox()).toEqual(size);
+  await page.keyboard.press('Enter');
+  await expect(help).toHaveAttribute('aria-pressed','true');
+  const guide=page.getByRole('button',{name:'Benchmark help and guided tutorial'});
+  await expect(guide.locator('svg')).toHaveAttribute('aria-hidden','true');
+  await expect(guide).toHaveText('Guided setup');
+  await page.screenshot({path:'../../.agentops/help-icons-desktop.png'});
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:'../../.agentops/help-icons-mobile.png'});
+});
+
+
+for (const width of [1280,390]) {
+  test(`guided setup stays visible while working in forms at ${width}px`,async ({page})=>{
+    await page.setViewportSize({width,height:900});
+    const state=await fixture(page);
+    await page.getByRole('button',{name:'Benchmark help and guided tutorial'}).click();
+    const guide=page.getByRole('dialog',{name:'Benchmark guide',exact:true});
+    await expect(guide).toHaveAttribute('aria-modal','false');
+    if(width<760) await expect.poll(()=>page.locator('#benchmark-view').evaluate(root=>root.getBoundingClientRect().bottom <= document.querySelector('.benchmark-guide').getBoundingClientRect().top)).toBe(true);
+    await guide.getByRole('button',{name:'Next',exact:true}).click();
+    await guide.getByRole('button',{name:'Go to this step',exact:true}).click();
+    await expect(guide).toBeVisible();
+    const form=page.locator('form[data-action="inspect"]');
+    const input=form.locator('input[name="artifact"]');
+    await expect(input).toBeFocused();
+    const clear=()=>page.evaluate(()=>{
+      const a=document.activeElement.getBoundingClientRect(),b=document.querySelector('.benchmark-guide').getBoundingClientRect();
+      return a.right<=b.left||a.left>=b.right||a.bottom<=b.top||a.top>=b.bottom;
+    });
+    await expect.poll(clear).toBe(true);
+    await form.getByRole('button',{name:'Browse Candidate artifact path',exact:true}).click();
+    await page.locator('.benchmark-picker').getByRole('button',{name:'Select file: candidate.whl',exact:true}).click();
+    await expect(guide).toBeVisible();
+    await form.locator('select[name="transport"]').selectOption('local');
+    await form.getByRole('button',{name:'Inspect candidate',exact:true}).focus();
+    await expect.poll(clear).toBe(true);
+    await page.keyboard.press('Enter');
+    await expect(form.locator('[role="status"]')).toContainText('Job submitted');
+    await expect(guide).toBeVisible();
+    await expect(guide.locator('[data-guide-status]')).toContainText('completed');
+    await page.locator('#benchmark-title').click();
+    await expect(guide).toBeVisible();
+    expect(state.posts).toHaveLength(1);
+    const otherField=page.locator('form[data-action="create"] input[name="model"]');
+    await otherField.focus();await otherField.fill('test-model');
+    await expect.poll(clear).toBe(true);
+    await expect(guide).toContainText('Step 2 of 5');
+    await guide.getByRole('button',{name:'Next',exact:true}).click();
+    await expect(guide).toContainText('Create a repeatable experiment');
+    const sha=page.locator('form[data-action="create"] input[name="candidate_sha"]');
+    await sha.focus();await sha.fill('a'.repeat(40));
+    await expect(sha).toHaveValue('a'.repeat(40));
+    await expect.poll(clear).toBe(true);
+    await expect(guide).toBeVisible();
+    await page.screenshot({path:`../../.agentops/persistent-guide-${width}.png`});
+    await page.setViewportSize({width:width===1280?390:1280,height:900});
+    await expect.poll(clear).toBe(true);
+    await expect(guide).toBeVisible();
+    await page.getByRole('button',{name:'Reviews',exact:true}).click();
+    await expect(guide).toBeHidden();
+    await page.getByRole('button',{name:'Benchmarking',exact:true}).click();
+    await expect(guide).toBeVisible();
+    await expect(guide).toContainText('Step 3 of 5');
+    await guide.getByRole('button',{name:'Close benchmark guide'}).click();
+    await expect(page.locator('#benchmark-view')).not.toHaveClass(/benchmark-tour-docked/);
+    expect(await page.locator('#benchmark-view').evaluate(root=>root.style.height)).toBe('');
+  });
+}
+
+
+test('guide follows asynchronous job progress without interrupting form focus',async ({page})=>{
+  const state=await fixture(page,[{id:'running-inspection',action:'inspect',state:'running',created_at:1,paths:{}}]);
+  await page.getByRole('button',{name:'Benchmark help and guided tutorial'}).click();
+  const guide=page.getByRole('dialog',{name:'Benchmark guide',exact:true});
+  await guide.getByRole('button',{name:'Next',exact:true}).click();
+  const input=page.locator('form[data-action="inspect"] input[name="artifact"]');
+  await expect(input).toBeFocused();
+  await expect(guide.locator('[data-guide-status]')).toContainText('running');
+  state.jobs[0].state='completed';
+  await expect(guide.locator('[data-guide-status]')).toContainText('completed',{timeout:7000});
+  await expect(input).toBeFocused();
+  await expect(guide).toBeVisible();
+  expect(state.posts).toHaveLength(0);
 });
