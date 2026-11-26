@@ -34,12 +34,12 @@
   };
   const controls = document.createElement('div');
   controls.className = 'benchmark-help-controls';
-  controls.innerHTML = `<button type="button" data-guide-open aria-label="Benchmark help and guided tutorial"><span aria-hidden="true">?</span> Guided setup</button><label><input type="checkbox" data-help-toggle> Show help</label>`;
+  controls.innerHTML = `<button type="button" class="benchmark-guide-trigger" data-guide-open aria-label="Benchmark help and guided tutorial" title="Guided setup"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m16 8-2.5 5.5L8 16l2.5-5.5L16 8Z"/></svg><span>Guided setup</span></button><button type="button" class="icon-button benchmark-help-toggle" data-help-toggle aria-label="Show help" aria-pressed="true" title="Show field help"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2-3 4"/><path d="M12 17h.01"/></svg></button>`;
   root.querySelector('.benchmark-heading').append(controls);
   let helpEnabled = true;
   try { helpEnabled = localStorage.getItem('agentops.benchmark.help') !== 'off'; } catch {}
   const helpToggle = controls.querySelector('[data-help-toggle]');
-  helpToggle.checked = helpEnabled;
+  helpToggle.setAttribute('aria-pressed', String(helpEnabled));
   let activeHelp = null;
   let activeHelpField = null;
   let helpDismissTimer;
@@ -51,7 +51,7 @@
   }
   function showHelp(input, hint) {
     clearTimeout(helpDismissTimer);
-    if (!helpToggle.checked || !input.getClientRects().length) return;
+    if (!helpEnabled || !input.getClientRects().length) return;
     if (activeHelp !== hint) { hideHelp(); hint.showPopover(); activeHelp = hint; }
     activeHelpField = input.closest('.benchmark-field') || input.parentElement;
     const anchor = input.getBoundingClientRect();
@@ -91,9 +91,11 @@
     hint.addEventListener('pointerleave', deferHideHelp);
   });
   helpToggle.title = 'Show floating help when you hover or focus a field';
-  helpToggle.addEventListener('change', () => {
+  helpToggle.addEventListener('click', () => {
+    helpEnabled = !helpEnabled;
+    helpToggle.setAttribute('aria-pressed', String(helpEnabled));
     hideHelp();
-    try { localStorage.setItem('agentops.benchmark.help', helpToggle.checked ? 'on' : 'off'); } catch {}
+    try { localStorage.setItem('agentops.benchmark.help', helpEnabled ? 'on' : 'off'); } catch {}
   });
   document.addEventListener('keydown', event => { if (event.key === 'Escape') hideHelp(); });
   document.addEventListener('scroll', hideHelp, true);

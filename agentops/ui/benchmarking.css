@@ -11,7 +11,10 @@
 .benchmark-view{width:100%;max-width:var(--shell,1800px);margin-inline:auto}.benchmark-workflow{align-items:start}.benchmark-field:has(small){flex-wrap:wrap}.benchmark-field small{flex-basis:100%;font-size:12px}
 
 .benchmark-help-controls, .benchmark-guide-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
-.benchmark-help-controls label { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
+.benchmark-guide-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; white-space: nowrap; }
+.benchmark-help-controls svg { width: 20px; height: 20px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.benchmark-help-toggle[aria-pressed="true"] { color: var(--accent); background: var(--soft); border-color: var(--accent); box-shadow: inset 0 2px 4px rgba(0, 0, 0, .16); }
+.benchmark-help-toggle[aria-pressed="false"] { color: var(--muted); box-shadow: none; }
 .benchmark-field-help { position: fixed; inset: auto; margin: 0; box-sizing: border-box; width: max-content; max-width: min(38ch, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); box-shadow: 0 4px 16px rgba(0, 0, 0, .18); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .benchmark-field-help:not(:popover-open) { display: none; }
 .benchmark-guide { width: min(38rem, calc(100vw - 2rem)); max-height: 85vh; overflow: auto; padding: 1.5rem; border-radius: 12px; background: var(--panel, #172333); color: var(--text, #eef4fa); border: 1px solid #64748b; }
