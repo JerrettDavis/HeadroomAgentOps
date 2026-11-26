@@ -1,3 +1,4 @@
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -103,6 +104,9 @@ def test_demo_runs_real_pairs_with_hashed_simulator_evidence(tmp_path):
     assert digest(evidence) == summary['result_sha256']
     assert evidence['studio']['design'] == validate_design(design)
     assert evidence['studio']['template_version'] == 1
+    candidate = evidence['studio']['manifest']['candidate']
+    assert candidate['sha'] == hashlib.sha256(candidate['artifact_sha256'].encode()).hexdigest()[:40]
+    assert demo(design, tmp_path / 'repeat')['studio']['manifest']['candidate'] == candidate
 
 
 def test_service_demo_is_durable_and_has_no_external_inputs(tmp_path):
