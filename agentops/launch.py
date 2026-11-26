@@ -358,3 +358,8 @@ class Launcher:
         with self.lock:
             return {run: {'exit_code': process.poll(), 'running': process.poll() is None}
                     for run, process in self.processes.items()}
+
+    def resume_saved_runs(self, handoff_path=None):
+        """Consume an authorized idle handoff before automatic scheduling starts."""
+        from .reload import consume
+        return consume(self, handoff_path)

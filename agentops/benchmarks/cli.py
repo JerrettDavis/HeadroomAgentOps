@@ -56,9 +56,23 @@ def load_config(path):
         "api_key_env",
         "extras",
         "diagnostics_dir",
+        "benchmark_tool",
+        "tool_python",
+        "provider_binding",
+        "load_concurrency",
     }
     if not isinstance(data, dict) or set(data) - allowed:
         raise ValueError("unknown runner configuration fields")
+    if data.get("benchmark_tool", "native") not in {"native", "inspect", "aiperf"}:
+        raise ValueError("unsupported benchmark tool")
+    if 'load_concurrency' in data and (data.get('benchmark_tool')!='aiperf'
+            or type(data['load_concurrency']) is not int or not 1<=data['load_concurrency']<=64):
+        raise ValueError('Load execution requires AIPerf and concurrency between 1 and 64')
+    if "provider_binding" in data and data["provider_binding"] not in {"openai","anthropic","azure","bedrock"}:
+        raise ValueError("unsupported explicit provider binding")
+    if "tool_python" in data and (not isinstance(data["tool_python"], str) or not data["tool_python"].strip()
+                                  or len(data["tool_python"]) > 4096 or any(ord(c) < 32 for c in data["tool_python"])):
+        raise ValueError("tool_python must identify a runner Python executable")
     if data.get("protocol", "openai") not in (
         "openai",
         "anthropic",
@@ -106,14 +120,22 @@ class SetupFailure:
 
 def run_local(args):
     experiment = load_json(args.manifest)
+    if isinstance(experiment, dict) and experiment.get("schema_version") == 2:
+        from .comparison import run_local_comparison
+        return run_local_comparison(args)
     validate_manifest(experiment)
     config = load_config(args.config)
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    if config.get("benchmark_tool", "native") != "native":
+        config["tool_artifacts_dir"] = str(output / "tool-evidence")
     with Workspace(prefix="candidate-", dir=output) as workspace:
         setup_error = None
         try:
             adapter = LocalAdapter(experiment, args.artifact, config, workspace)
+            if config.get('load_concurrency'):
+                from .load_adapter import LoadAdapter
+                adapter=LoadAdapter(adapter,concurrency=config['load_concurrency'])
         except KeyboardInterrupt:
             adapter = SetupFailure(KeyboardInterrupt())
             setup_error = "cancelled"
@@ -121,11 +143,13 @@ def run_local(args):
             adapter = SetupFailure(exc)
             setup_error = type(exc).__name__
         result = run_experiment(experiment, adapter)
+        if config.get('load_concurrency'):
+            result['load_batches']=getattr(adapter,'batches',[])
         result["runner_config_digest"] = digest(
             {
                 key: value
                 for key, value in config.items()
-                if key not in ("diagnostics_dir", "wheelhouse")
+                if key not in ("diagnostics_dir", "wheelhouse", "tool_artifacts_dir")
             }
         )
         lane = "simulator" if getattr(adapter, "simulator", False) else args.lane
@@ -153,6 +177,24 @@ def run_local(args):
 def parser():
     root = argparse.ArgumentParser(prog="headroom-benchmark", description=__doc__)
     commands = root.add_subparsers(dest="command", required=True)
+    demonstration = commands.add_parser("demo", help="run an offline Studio simulation without provider calls")
+    demonstration.add_argument("--design", required=True)
+    demonstration.add_argument("--output", required=True)
+    source = commands.add_parser("resolve-source", help="explicitly fetch a pinned artifact or build a pinned commit in Docker")
+    source.add_argument("--source", required=True)
+    source.add_argument("--output", required=True)
+    group = commands.add_parser("group", help="execute a preflighted immutable Studio experiment matrix")
+    group.add_argument("--plan-file", required=True)
+    group.add_argument("--plan-digest", required=True)
+    group.add_argument("--output", required=True)
+    tool = commands.add_parser("prepare-local-tool", help="explicitly install a pinned harness in a managed environment")
+    tool.add_argument("--tool", choices=("inspect", "aiperf"), required=True)
+    tool.add_argument("--root", required=True)
+    tool.add_argument("--output", required=True)
+    setup = commands.add_parser("prepare-tool", help="explicitly prepare a local, Docker or SSH harness runtime")
+    setup.add_argument("--setup", required=True)
+    setup.add_argument("--root", required=True)
+    setup.add_argument("--output", required=True)
     export = commands.add_parser(
         "export-dataset", help="export private task inputs for an OSS harness"
     )
@@ -209,6 +251,8 @@ def parser():
         )
         if name == "run":
             cmd.add_argument("manifest")
+            cmd.add_argument("--baseline-artifact", help="second pinned build for a v2 comparison")
+            cmd.add_argument("--baseline-config", help="optional separate baseline runner configuration")
             cmd.add_argument("--lane", choices=("live", "simulator"), default="live")
         else:
             cmd.add_argument("--sha256", required=True)
@@ -252,6 +296,34 @@ def main(argv=None):
             signum = getattr(signal, name)
             previous[signum] = signal.signal(signum, cancel)
     try:
+        if args.command == "prepare-local-tool":
+            from .tools import prepare
+            ready = prepare(args.tool, Path(args.root).expanduser())
+            save_json(Path(args.output) / "tool.json", dict(ready, tool=args.tool))
+            return 0 if ready["available"] else 64
+        if args.command == "prepare-tool":
+            from agentops.benchmark_tool_setup import setup, recover
+            spec = load_json_text(args.setup)
+            ready = (recover(spec["recover"], Path(args.root), Path(args.output))
+                     if isinstance(spec, dict) and set(spec) == {"recover"} else
+                     setup(spec, Path(args.root), Path(args.output)))
+            save_json(Path(args.output) / "tool-setup.json", ready)
+            return 0 if ready["available"] else 75 if ready.get("status") == "inconclusive" else 64
+        if args.command == "group":
+            from agentops.benchmark_groups import run_group
+            plan = load_json(args.plan_file)
+            if digest(plan) != args.plan_digest:
+                raise ValueError("Immutable group input digest mismatch")
+            result = run_group(plan, args.output)
+            return {"pass": 0, "fail": 1, "inconclusive": 2}[result["decision"]["status"]]
+        if args.command == "resolve-source":
+            from agentops.benchmark_resolver import resolve
+            resolve(load_json_text(args.source), args.output)
+            return 0
+        if args.command == "demo":
+            from agentops.benchmark_studio import demo
+            demo(load_json_text(args.design), args.output)
+            return 2
         if args.command == "export-dataset":
             from .interop import export_dataset
 

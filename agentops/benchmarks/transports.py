@@ -40,7 +40,7 @@ def stage_inputs(args, stage):
         inner += ["experiment.json", "--lane", args.lane]
     else:
         inner += ["--sha256", args.sha256, "--seed", str(args.seed)]
-    return inner + [
+    command = inner + [
         "--artifact",
         artifact.name,
         "--config",
@@ -48,6 +48,24 @@ def stage_inputs(args, stage):
         "--output",
         "results",
     ]
+    if args.command == "run" and getattr(args, "baseline_artifact", None):
+        baseline = Path(args.baseline_artifact).resolve(strict=True)
+        if baseline.suffix != ".whl":
+            raise ValueError("baseline must be an immutable wheel")
+        target = stage / "baseline"
+        target.mkdir()
+        shutil.copyfile(baseline, target / baseline.name)
+        baseline_config = load_config(getattr(args, "baseline_config", None) or args.config)
+        if baseline_config.get("wheelhouse"):
+            wheelhouse = target / "wheelhouse"
+            wheelhouse.mkdir()
+            for source in Path(baseline_config["wheelhouse"]).glob("*.whl"):
+                shutil.copyfile(source, wheelhouse / source.name)
+            baseline_config["wheelhouse"] = "wheelhouse"
+        save_json(target / "runner.json", baseline_config)
+        command += ["--baseline-artifact", "baseline/" + baseline.name,
+                    "--baseline-config", "baseline/runner.json"]
+    return command
 
 
 def docker_command(args, stage, image_id, inner, container_name=None):

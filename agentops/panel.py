@@ -328,6 +328,9 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
         raise ValueError('The panel binds to loopback only')
     page = Path(__file__).with_name('panel.html')
     assets = {
+        '/ui/benchmark-measured.js': (page.parent / 'ui' / 'benchmark-measured.js', 'text/javascript; charset=utf-8'),
+        '/ui/benchmark-sources.js': (page.parent / 'ui' / 'benchmark-sources.js', 'text/javascript; charset=utf-8'),
+        '/ui/benchmark-studio.js': (page.parent / 'ui' / 'benchmark-studio.js', 'text/javascript; charset=utf-8'),
         '/ui/benchmarking.js': (page.parent / 'ui' / 'benchmarking.js', 'text/javascript; charset=utf-8'),
         '/ui/benchmarking.css': (page.parent / 'ui' / 'benchmarking.css', 'text/css; charset=utf-8'),
         '/ui/marked.js': (page.parent / 'ui' / 'marked.js', 'text/javascript; charset=utf-8'),
@@ -355,6 +358,10 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
     stack_lock = threading.Lock()
     benchmark_holder = [benchmark_service]
     benchmark_lock = threading.Lock()
+    from .benchmark_sources import Sources
+    benchmark_sources = Sources(launcher.github)
+    from .benchmark_models import Models
+    benchmark_models = Models()
     def benchmarks():
         from .benchmark_service import BenchmarkService
         with benchmark_lock:
@@ -367,6 +374,7 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                 stack_holder[0] = StackService(path, launcher.config, launcher.github)
             return stack_holder[0]
     from .automation import AutoReview
+    launcher.resume_saved_runs()
     automation = AutoReview(launcher)
     from .allowance_monitor import AllowanceMonitor
     from .provider_usage import authentication_fingerprint, read_usage
@@ -411,6 +419,49 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                     result = benchmarks().submit(payload)
                 elif self.path == '/api/benchmarks/cancel':
                     result = benchmarks().cancel(payload)
+                elif self.path == '/api/benchmarks/studio/draft':
+                    from .benchmark_studio import Studio
+                    result = Studio(benchmarks()).save_draft(payload)
+                elif self.path == '/api/benchmarks/studio/preview':
+                    from .benchmark_studio import preview
+                    result = preview(payload)
+                elif self.path == '/api/benchmarks/measured/draft':
+                    from .benchmark_studio import Studio
+                    result = Studio(benchmarks()).measured_draft(payload)
+                elif self.path == '/api/benchmarks/measured/designs':
+                    from .benchmark_studio import Studio
+                    result = Studio(benchmarks()).measured_library(payload)
+                elif self.path == '/api/benchmarks/measured/preview':
+                    from .benchmark_experiments import preview
+                    result = preview(payload)
+                elif self.path == '/api/benchmarks/measured/preflight':
+                    from .benchmark_experiments import preflight
+                    result = preflight(payload, benchmarks())
+                elif self.path == '/api/benchmarks/measured/capabilities':
+                    from .benchmark_experiments import capabilities
+                    result = capabilities(payload, benchmarks())
+                elif self.path == '/api/benchmarks/measured/models':
+                    if not isinstance(payload, dict) or set(payload) != {'provider'}:
+                        raise ValueError('Choose a provider for model discovery')
+                    result = benchmark_models.list(payload['provider'])
+                elif self.path == '/api/benchmarks/measured/recovery-preview':
+                    from .benchmark_groups import prepare_recovery
+                    from .benchmark_experiments import preview
+                    plan = prepare_recovery(payload, benchmarks())
+                    result = {**preview(plan['design']), 'ready': True, 'resolved': plan['resolved'],
+                              'lane': plan['lane'], 'charges': plan['charges'],
+                              'checks': [{'id': 'recovery', 'ready': True,
+                                          'description': 'Verified completed cells are preserved; unresolved remote executions are collected before any replacement request.'}]}
+                elif self.path == '/api/benchmarks/studio/sources':
+                    if not isinstance(payload, dict) or set(payload) - {'repository', 'query', 'page', 'kind'}:
+                        raise ValueError('Unknown source search settings')
+                    result = benchmark_sources.search(payload.get('repository', launcher.config.get('repo', '')),
+                                                      payload.get('query', ''), payload.get('page', 1), payload.get('kind', 'commits'))
+                elif self.path == '/api/benchmarks/studio/artifacts':
+                    if not isinstance(payload, dict) or set(payload) - {'repository', 'sha', 'page'}:
+                        raise ValueError('Unknown artifact search settings')
+                    result = benchmark_sources.artifacts(payload.get('repository', launcher.config.get('repo', '')),
+                                                         payload.get('sha'), payload.get('page', 1))
                 else:
                     self.send_error(404)
                     return
@@ -461,6 +512,33 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                     body = redact(json.dumps(benchmarks().status(), ensure_ascii=False, allow_nan=False)).encode()
                 except (ValueError, OSError):
                     status, body = 503, b'{"error":"Benchmark status unavailable. Saved evidence is retained."}'
+            elif url.path == '/api/benchmarks/studio':
+                if not secrets.compare_digest(self.headers.get('X-Launch-Token', ''), token):
+                    status, body = 403, b'{"error":"Dashboard token required for Studio."}'
+                else:
+                    from .benchmark_studio import Studio
+                    try:
+                        query = parse_qs(url.query)
+                        studio = Studio(benchmarks())
+                        result = studio.result(query['job'][0]) if 'job' in query else studio.source(query['source'][0]) if 'source' in query else studio.state()
+                        if 'job' not in query and 'source' not in query:
+                            result['default_repository'] = launcher.config.get('repo', '')
+                        body = redact(json.dumps(result, ensure_ascii=False, allow_nan=False)).encode()
+                    except (ValueError, KeyError, OSError, TypeError):
+                        status, body = 400, b'{"error":"Studio data unavailable. Refresh saved jobs and try again."}'
+            elif url.path == '/api/benchmarks/measured':
+                if not secrets.compare_digest(self.headers.get('X-Launch-Token', ''), token):
+                    status, body = 403, b'{"error":"Dashboard token required for measured experiments."}'
+                else:
+                    from .benchmark_studio import Studio
+                    try:
+                        query = parse_qs(url.query)
+                        studio = Studio(benchmarks())
+                        result = (studio.group_result(query['group'][0]) if 'group' in query else
+                                  studio.group_plan(query['recover'][0]) if 'recover' in query else studio.measured_state())
+                        body = redact(json.dumps(result, ensure_ascii=False, allow_nan=False)).encode()
+                    except (ValueError, KeyError, OSError, TypeError):
+                        status, body = 400, b'{"error":"Measured experiment evidence unavailable. Refresh saved groups and check their progress."}'
             elif url.path == '/api/benchmark-files':
                 if not secrets.compare_digest(self.headers.get('X-Launch-Token', ''), token):
                     status, body = 403, b'{"error":"Dashboard token required for file browsing."}'

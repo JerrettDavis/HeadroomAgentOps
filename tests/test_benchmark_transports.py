@@ -66,6 +66,24 @@ def test_stage_contains_only_worker_and_explicit_inputs(tmp_path):
     assert (stage / "agentops/benchmarks/cli.py").exists()
 
 
+def test_two_build_staging_keeps_same_named_wheels_separate(tmp_path):
+    config=args(tmp_path)
+    directory=tmp_path/'baseline';directory.mkdir()
+    baseline,_=build_fixture(directory)
+    with zipfile.ZipFile(baseline,'a') as wheel:
+        wheel.writestr('headroom/build_variant.py','VALUE = "baseline"\n')
+    config.command='run'
+    config.baseline_artifact=str(baseline)
+    config.baseline_config=None
+    config.manifest=str(tmp_path/'comparison.json')
+    Path(config.manifest).write_text(json.dumps({'schema_version':2}))
+    stage=tmp_path/'stage'
+    inner=stage_inputs(config,stage)
+    assert (stage/Path(config.artifact).name).read_bytes()!= (stage/'baseline'/baseline.name).read_bytes()
+    assert inner[inner.index('--baseline-artifact')+1]=='baseline/'+baseline.name
+    assert (stage/'baseline/runner.json').is_file()
+
+
 def test_docker_command_pins_image_and_enforces_limits(tmp_path):
     config = args(tmp_path)
     command = docker_command(config, tmp_path, "sha256:" + "a" * 64, ["inspect"])

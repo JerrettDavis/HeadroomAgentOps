@@ -3,6 +3,8 @@ const {test, expect} = require('@playwright/test');
 async function fixture(page, initial = []) {
   const state = {jobs: initial, posts: []};
   await page.route('**/api/launcher', route => route.fulfill({json:{token:'benchmark-test-token'}}));
+await page.route('**/api/benchmarks/studio', route => route.fulfill({status:503,json:{error:'Studio disabled in legacy fixture.'}}));
+await page.route('**/api/benchmarks/measured', route => route.fulfill({status:503,json:{error:'Measured designer disabled in legacy fixture.'}}));
   await page.route('**/api/benchmark-files?**', route => route.fulfill({json:{directory:'/fixture',parent:'/',roots:[{name:'Home',path:'/fixture'}],entries:['/candidate.whl','/missing','/keep-this'].map(path => ({name:path.slice(1),path,directory:false})),kind:'wheel'}}));
   await page.route('**/api/benchmarks', async route => {
     if (route.request().method() === 'POST') {
@@ -15,6 +17,8 @@ async function fixture(page, initial = []) {
   await page.goto('/');
   await page.getByRole('button',{name:'Benchmarking',exact:true}).click();
   await expect(page.locator('#benchmark-status')).toContainText('up to date');
+await expect(page.locator('.studio [data-studio-status]')).toHaveText('Studio disabled in legacy fixture.');
+await expect(page.locator('[data-measured-status]')).toHaveText('Measured designer disabled in legacy fixture.');
   return state;
 }
 
@@ -22,6 +26,16 @@ async function chooseArtifact(page, form, path) {
   await form.getByRole('button',{name:'Browse Candidate artifact path',exact:true}).click();
   await page.getByRole('dialog').getByRole('button',{name:`Select file: ${path.slice(1)}`,exact:true}).click();
 }
+
+test('a delayed file-picker close event preserves a newer keyboard focus choice',async ({page})=>{
+  await fixture(page);
+  const form=page.locator('form[data-action=inspect]');
+  await chooseArtifact(page,form,'/candidate.whl');
+  const submit=form.getByRole('button',{name:'Inspect candidate',exact:true});
+  await submit.focus();
+  await page.locator('.benchmark-picker').evaluate(dialog=>dialog.dispatchEvent(new Event('close')));
+  await expect(submit).toBeFocused();
+});
 
 test('guided inspect, create and run submits authenticated actions and shows measured results', async ({page}) => {
   const state = await fixture(page);
@@ -197,7 +211,7 @@ for (const width of [1280, 390]) {
     const geometry=()=>page.locator('#benchmark-view').evaluate(root=>
       [...root.querySelectorAll('form, form label, form input, form select, form button')]
         .filter(el=>el.getClientRects().length).map(el=>{
-          const r=el.getBoundingClientRect();return [r.x,r.y,r.width,r.height];
+const r=el.getBoundingClientRect();return [r.x+root.scrollLeft+window.scrollX,r.y+root.scrollTop+window.scrollY,r.width,r.height];
         }));
     const before=await geometry();
     await toggle.click();
@@ -241,8 +255,8 @@ test('help icon has a stable pressed state and supports keyboard toggling', asyn
   const help=page.getByRole('button',{name:'Show help',exact:true});
   await expect(help).toHaveAttribute('aria-pressed','true');
   await expect(help.locator('svg')).toHaveAttribute('aria-hidden','true');
-  const size=await help.boundingBox();
   await help.focus();
+  const size=await help.boundingBox();
   await page.keyboard.press('Space');
   await expect(help).toHaveAttribute('aria-pressed','false');
   expect(await help.boundingBox()).toEqual(size);
