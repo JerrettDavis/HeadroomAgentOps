@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from .process import _started, owner_state
+from .publisher import publication_lock
 
 
 def _save(path, value):
@@ -102,7 +103,7 @@ def _reviewers():
 def _source():
     directory = Path(__file__).resolve().parent.parent
     commit = _command(['git', '-C', str(directory), 'rev-parse', 'HEAD'])
-    clean = _command(['git', '-C', str(directory), 'status', '--porcelain', '--untracked-files=no'])
+    clean = _command(['git', '-C', str(directory), 'status', '--porcelain', '--untracked-files=all'])
     if commit.returncode or clean.returncode or clean.stdout.strip() or not re.fullmatch(r'[a-f0-9]{40}', commit.stdout.strip()):
         raise ValueError('Coordinator reload requires a clean committed source checkpoint')
     return {'root': str(directory), 'commit': commit.stdout.strip()}
@@ -110,6 +111,14 @@ def _source():
 
 @contextlib.contextmanager
 def _locked(root):
+    # Match Publisher's lock order: publication lease, THEN SQLite writer lock.
+    with publication_lock(Path(root) / 'ledger.sqlite3'):
+        with _database_locked(root) as connection:
+            yield connection
+
+
+@contextlib.contextmanager
+def _database_locked(root):
     connection = sqlite3.connect(Path(root) / 'ledger.sqlite3', timeout=30)
     connection.row_factory = sqlite3.Row
     try:
@@ -252,6 +261,32 @@ def activate(root):
     return {'status': 'ready', 'run_ids': sorted(receipt['runs']), 'queued_count': len(receipt['queued'])}
 
 
+def _spawn_tree(root, launched):
+    """Only actual spawned PID/creation identities grant descendant ownership."""
+    observed = discover(root)
+    owned = {}
+    for run_id, identity in launched.items():
+        state = owner_state(json.dumps(identity))
+        if state == 'unknown':
+            raise ValueError('Spawned process ownership became unobservable')
+        if state != 'live':
+            continue
+        matches = [p for p in observed if p['pid'] == identity['pid'] and
+                   p['started'] == identity['started'] and p['host'] == identity['host'] and
+                   p['role'] == 'coordinator' and p['run_id'] == run_id]
+        if len(matches) != 1:
+            raise ValueError('Spawned process command identity differs')
+        owned[identity['pid']] = matches[0]
+    while True:
+        children = [p for p in observed if p['pid'] not in owned and
+                    p['parent_pid'] in owned and p['role'] == 'coordinator' and
+                    p['run_id'] == owned[p['parent_pid']]['run_id'] and
+                    owner_state(json.dumps(p)) == 'live']
+        if not children:
+            return list(owned.values())
+        owned.update({p['pid']: p for p in children})
+
+
 def consume(launcher, handoff_path=None):
     """New panel startup, BEFORE AutoReview: register exact saved plans once."""
     root = launcher.root.resolve()
@@ -296,7 +331,9 @@ def consume(launcher, handoff_path=None):
             # No child can claim while this transaction holds the writer lock.
             # Roll back only freshly launched, command-verified controllers.
             try:
-                fresh = [p for p in discover(root) if p['role'] == 'coordinator' and p['run_id'] in attempted]
+                if any(identity in launcher.processes and identity not in receipt['launched'] for identity in attempted):
+                    raise ValueError('A spawned process lacks verified creation identity')
+                fresh = _spawn_tree(root, receipt['launched'])
                 parents = {p['parent_pid'] for p in fresh}
                 for process in sorted(fresh, key=lambda p: p['pid'] in parents):
                     if owner_state(json.dumps(process)) == 'live':

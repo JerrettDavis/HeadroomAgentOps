@@ -1,4 +1,5 @@
 import json
+import contextlib
 import socket
 from pathlib import Path
 from unittest.mock import Mock
@@ -169,3 +170,56 @@ def test_activate_rejects_job_claim_after_capture_before_any_termination(state, 
     with pytest.raises(ValueError, match='active'):
         reload.activate(root)
     terminate.assert_not_called()
+
+
+def test_spawn_rollback_never_kills_foreign_same_run_controller(state, monkeypatch):
+    root, _, runs, watch, _ = state
+    path = reload.capture(root, 'o/r')
+    receipt = json.loads(path.read_text())
+    receipt['status'] = 'ready'
+    path.write_text(json.dumps(receipt))
+    auto = json.loads((root / 'auto-review.json').read_text())
+    auto['settings'] = {**watch, 'new_prs': False, 'updated_prs': False}
+    (root / 'auto-review.json').write_text(json.dumps(auto))
+    foreign = {'host': socket.gethostname(), 'pid': 900, 'started': 'foreign',
+               'parent_pid': 1, 'role': 'coordinator', 'run_id': sorted(runs)[0]}
+    observations = iter([[], [foreign]])
+    monkeypatch.setattr(reload, 'discover', lambda root: next(observations))
+    monkeypatch.setattr(reload, 'owner_state', lambda identity: 'live' if json.loads(identity)['pid'] == 900 else 'missing')
+    launcher = Launcher(root / 'ledger.sqlite3', {'repo': 'o/r'}, github=Mock())
+    monkeypatch.setattr(launcher, '_spawn', lambda result: {**result, 'error': 'spawn failed'})
+    terminated = []
+    monkeypatch.setattr(reload, '_terminate', lambda identity: terminated.append(identity['pid']))
+    with pytest.raises(ValueError, match='could not be started'):
+        launcher.resume_saved_runs()
+    assert terminated == []
+
+
+def test_dispatch_lock_waits_for_publication_before_opening_database(tmp_path, monkeypatch):
+    events = []
+    @contextlib.contextmanager
+    def publication(path):
+        events.append('publication-enter')
+        yield
+        events.append('publication-exit')
+    @contextlib.contextmanager
+    def database(root):
+        events.append('database-enter')
+        yield 'connection'
+        events.append('database-exit')
+    monkeypatch.setattr(reload, 'publication_lock', publication)
+    monkeypatch.setattr(reload, '_database_locked', database)
+    with reload._locked(tmp_path) as connection:
+        assert connection == 'connection'
+    assert events == ['publication-enter', 'database-enter', 'database-exit', 'publication-exit']
+
+
+def test_spawn_tree_requires_actual_parent_creation_identity(state, monkeypatch):
+    root, _, runs, _, _ = state
+    run = runs[0]
+    parent = {'host': socket.gethostname(), 'pid': 301, 'started': 'owned',
+              'parent_pid': 1, 'role': 'coordinator', 'run_id': run}
+    child = {**parent, 'pid': 302, 'started': 'child', 'parent_pid': 301}
+    foreign = {**parent, 'pid': 900, 'started': 'foreign'}
+    monkeypatch.setattr(reload, 'discover', lambda root: [parent, child, foreign])
+    assert {p['pid'] for p in reload._spawn_tree(root, {run: parent})} == {301, 302}
