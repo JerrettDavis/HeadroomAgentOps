@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .core import ARMS, digest, evaluate, finite_number, schedule, validate_manifest
 from .local import LocalAdapter
-from .runner import expected_identity, write_evidence
+from .runner import expected_identity, write_evidence, public_tool_metrics
 from .workspace import Workspace
 
 COMPARISON_ARMS = ('baseline', 'candidate')
@@ -69,6 +69,8 @@ def run_comparison(experiment, baseline_adapter, candidate_adapter):
             try:
                 observed = adapters[arm].attempt(copy.deepcopy(experiment[arm]),
                     copy.deepcopy(tasks[pair['task_id']]), ARMS[int(enabled)])
+                if 'tool_metrics' in observed:
+                    row['tool_metrics'] = public_tool_metrics(observed['tool_metrics'])
                 identity = observed.get('identity')
                 if not isinstance(identity, dict):
                     identity = {}
@@ -140,6 +142,9 @@ def run_local_comparison(args):
     artifacts = {'baseline': args.baseline_artifact, 'candidate': args.artifact}
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    for arm, config in configs.items():
+        if config.get('benchmark_tool', 'native') != 'native':
+            config['tool_artifacts_dir'] = str(output / 'tool-evidence' / arm)
     with ExitStack() as stack:
         adapters, errors = {}, {}
         for arm in COMPARISON_ARMS:
@@ -157,7 +162,7 @@ def run_local_comparison(args):
         result = run_comparison(experiment, adapters['baseline'], adapters['candidate'])
         result['runner_config_digests'] = {
             arm: digest({key: value for key, value in configs[arm].items()
-                         if key not in ('diagnostics_dir', 'wheelhouse')}) for arm in COMPARISON_ARMS}
+                         if key not in ('diagnostics_dir', 'wheelhouse', 'tool_artifacts_dir')}) for arm in COMPARISON_ARMS}
         lane = 'simulator' if result['simulator_arms'] else getattr(args, 'lane', 'live')
         result['lane'] = lane
         if errors:

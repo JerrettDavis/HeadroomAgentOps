@@ -45,6 +45,20 @@ def proxy_environment(config, inherited):
             env["HEADROOM_BACKEND"] = args[index + 1]
         elif arg.startswith("--backend="):
             env["HEADROOM_BACKEND"] = arg.split("=", 1)[1]
+    binding=config.get("provider_binding")
+    if binding in {"anthropic","bedrock"}:
+        env["HEADROOM_BACKEND"]=binding
+    elif binding in {"openai","azure"}:
+        # The native CLI uses "anthropic" for direct protocol routing;
+        # other backend names enable translation, including inherited settings.
+        env["HEADROOM_BACKEND"]="anthropic"
+    if binding=="azure" and env.get("AZURE_OPENAI_ENDPOINT"):
+        endpoint=env["AZURE_OPENAI_ENDPOINT"].rstrip("/")
+        if endpoint.endswith("/v1"):
+            endpoint=endpoint[:-3]
+        if not endpoint.endswith("/openai"):
+            endpoint+="/openai"
+        env["OPENAI_TARGET_API_URL"]=endpoint
     return env
 
 
@@ -306,12 +320,16 @@ class LocalAdapter:
     def attempt(self, experiment, task, arm):
         before_environment = describe_environment(self.python)
         with self.runtime(experiment, arm) as (request, before):
-            result = completion(
-                request,
-                self.config.get("protocol", "openai"),
-                self.config.get("request_model", experiment["model"]),
-                task,
-            )
+            protocol = self.config.get("protocol", "openai")
+            model = self.config.get("request_model", experiment["model"])
+            tool = self.config.get("benchmark_tool", "native")
+            if tool == "native":
+                result = completion(request, protocol, model, task)
+            else:
+                from .tools import attempt
+                artifacts = Path(self.config.get("tool_artifacts_dir", self.workspace))
+                result = attempt(tool, request, protocol, model, task,
+                                 artifacts / ("harness-" + uuid.uuid4().hex), self.config)
             after = observe_runtime(request)
             if before != after or before_environment != describe_environment(
                 self.python

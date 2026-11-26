@@ -83,7 +83,13 @@
     // Keep help outside the form's flex/grid layout and overflow container.
     document.body.append(hint);
     const field = input.closest('.benchmark-field') || input.parentElement;
-    field.addEventListener('pointerenter', () => showHelp(input, hint));
+    field.addEventListener('pointerenter', () => {
+      // Scrolling a focused field into view can put another field under the mouse.
+      // Keep keyboard guidance attached to the focused field in that case.
+      const focused = document.activeElement;
+      if (focused !== input && root.contains(focused) && focused?.hasAttribute('aria-describedby')) return;
+      showHelp(input, hint);
+    });
     field.addEventListener('pointerleave', deferHideHelp);
     field.addEventListener('focusin', () => showHelp(input, hint));
     field.addEventListener('focusout', event => { if (!field.contains(event.relatedTarget)) deferHideHelp(); });

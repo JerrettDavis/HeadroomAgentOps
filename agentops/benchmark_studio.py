@@ -162,6 +162,75 @@ class Studio:
                 'sources': sources,
                 'jobs': [j for j in state['jobs'] if j['action'] == 'demo']}
 
+    def measured_state(self):
+        from .benchmark_experiments import catalogue as measured_catalogue, validate
+        draft_path=self.service.root/'measured-draft.json'
+        draft=validate(json.loads(draft_path.read_text('utf-8'))) if draft_path.is_file() else None
+        state=self.service.status()
+        groups=[]
+        setups=[]
+        for job in state['jobs']:
+            if job['action']=='tool':
+                ready=None
+                try:
+                    path=self.service.root/job['id']/'tool-setup.json'
+                    if path.stat().st_size<=65536:
+                        ready=json.loads(path.read_text('utf-8'))
+                except (OSError,ValueError,TypeError):
+                    pass
+                setups.append(dict(job,setup=ready,collectable=(self.service.root/job['id']/'tool-setup-receipt.json').is_file()))
+            if job['action']!='group':
+                continue
+            cells=[]
+            group_state=job['state']
+            try:
+                progress=json.loads((self.service.root/job['id']/'group-state.json').read_text('utf-8'))
+                group_state=progress['state']
+                fields={'id','tool','scenario','feature','provider','model','state','decision','error','reused'}
+                cells=[{k:v for k,v in c.items() if k in fields} for c in progress['cells']]
+            except (OSError,KeyError,ValueError,TypeError):
+                try:
+                    plan=json.loads((self.service.root/job['id']/'group-input.json').read_text('utf-8'))
+                    if digest(plan)==job.get('group_input_digest'):
+                        cells=[dict(c,state='pending') for c in plan['cells']]
+                except (OSError,KeyError,ValueError,TypeError):
+                    pass
+            groups.append(dict(job,cells=cells,group_state=group_state))
+        return {'catalogue':measured_catalogue(),'draft':draft,'groups':groups,'active':state['active'],'tool_setups':setups,
+                'sources':[j for j in state['jobs'] if j['action']=='source' and j['state']=='completed']}
+
+    def measured_draft(self,payload):
+        from .benchmark_experiments import validate
+        from .benchmark_service import _guard,_write
+        design=validate(payload)
+        with _guard(self.service.root):
+            _write(self.service.root/'measured-draft.json',design)
+        return {'draft':design}
+
+    def group_result(self,identifier):
+        from .benchmark_service import _result
+        job=self.service._prior(identifier,'group')
+        if job['state'] not in {'completed','cancelled'}:
+            raise ValueError('Verified results are available after the group process stops')
+        directory=self.service.root/identifier
+        summary=json.loads((directory/'summary.json').read_text('utf-8'))
+        qualification,path=_result(directory,summary,job.get('exit_code'),job['state']=='cancelled')
+        if path is None:
+            raise ValueError('Group result could not be verified')
+        result=json.loads(Path(path).read_text('utf-8'))
+        if result.get('kind')!='studio-experiment-group' or result['group_manifest_digest']!=job.get('group_input_digest'):
+            raise ValueError('Group input/evidence identity mismatch')
+        return {'id':identifier,'result':result,'qualification':qualification,'sha256':digest(result)}
+
+    def group_plan(self,identifier):
+        job=self.service._prior(identifier,'group')
+        plan=json.loads((self.service.root/identifier/'group-input.json').read_text('utf-8'))
+        if digest(plan)!=job.get('group_input_digest'):
+            raise ValueError('Saved group input could not be verified')
+        progress=next((g for g in self.measured_state()['groups'] if g['id']==identifier),None)
+        return {'id':identifier,'design':plan['design'],'cells':progress['cells'] if progress else plan['cells'],
+                'state':job['state'],'manifest_digest':digest(plan)}
+
     def save_draft(self, payload):
         from .benchmark_service import _guard, _write
         design = validate_design(payload)

@@ -4,6 +4,7 @@ async function fixture(page, initial = []) {
   const state = {jobs: initial, posts: []};
   await page.route('**/api/launcher', route => route.fulfill({json:{token:'benchmark-test-token'}}));
 await page.route('**/api/benchmarks/studio', route => route.fulfill({status:503,json:{error:'Studio disabled in legacy fixture.'}}));
+await page.route('**/api/benchmarks/measured', route => route.fulfill({status:503,json:{error:'Measured designer disabled in legacy fixture.'}}));
   await page.route('**/api/benchmark-files?**', route => route.fulfill({json:{directory:'/fixture',parent:'/',roots:[{name:'Home',path:'/fixture'}],entries:['/candidate.whl','/missing','/keep-this'].map(path => ({name:path.slice(1),path,directory:false})),kind:'wheel'}}));
   await page.route('**/api/benchmarks', async route => {
     if (route.request().method() === 'POST') {
@@ -17,6 +18,7 @@ await page.route('**/api/benchmarks/studio', route => route.fulfill({status:503,
   await page.getByRole('button',{name:'Benchmarking',exact:true}).click();
   await expect(page.locator('#benchmark-status')).toContainText('up to date');
 await expect(page.locator('.studio [data-studio-status]')).toHaveText('Studio disabled in legacy fixture.');
+await expect(page.locator('[data-measured-status]')).toHaveText('Measured designer disabled in legacy fixture.');
   return state;
 }
 
@@ -253,8 +255,8 @@ test('help icon has a stable pressed state and supports keyboard toggling', asyn
   const help=page.getByRole('button',{name:'Show help',exact:true});
   await expect(help).toHaveAttribute('aria-pressed','true');
   await expect(help.locator('svg')).toHaveAttribute('aria-hidden','true');
-  const size=await help.boundingBox();
   await help.focus();
+  const size=await help.boundingBox();
   await page.keyboard.press('Space');
   await expect(help).toHaveAttribute('aria-pressed','false');
   expect(await help.boundingBox()).toEqual(size);
