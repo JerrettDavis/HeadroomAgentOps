@@ -173,6 +173,8 @@ test('help persists and tutorial navigates without launching jobs', async ({page
   await expect(page.locator('form[data-action="create"] select').first()).toBeFocused();
   await open.click();
   await page.keyboard.press('Escape');
+  await expect(guide).toBeVisible();
+  await guide.getByRole('button', {name:'Close benchmark guide'}).click();
   await expect(guide).not.toBeVisible();
   await expect(open).toBeFocused();
   await open.click();
@@ -253,3 +255,62 @@ test('help icon has a stable pressed state and supports keyboard toggling', asyn
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:'../../.agentops/help-icons-mobile.png'});
 });
+
+
+for (const width of [1280,390]) {
+  test(`guided setup stays visible while working in forms at ${width}px`,async ({page})=>{
+    await page.setViewportSize({width,height:900});
+    const state=await fixture(page);
+    await page.getByRole('button',{name:'Benchmark help and guided tutorial'}).click();
+    const guide=page.getByRole('dialog',{name:'Benchmark guide',exact:true});
+    await expect(guide).toHaveAttribute('aria-modal','false');
+    if(width<760) await expect.poll(()=>page.locator('#benchmark-view').evaluate(root=>root.getBoundingClientRect().bottom <= document.querySelector('.benchmark-guide').getBoundingClientRect().top)).toBe(true);
+    await guide.getByRole('button',{name:'Next',exact:true}).click();
+    await guide.getByRole('button',{name:'Go to this step',exact:true}).click();
+    await expect(guide).toBeVisible();
+    const form=page.locator('form[data-action="inspect"]');
+    const input=form.locator('input[name="artifact"]');
+    await expect(input).toBeFocused();
+    const clear=()=>page.evaluate(()=>{
+      const a=document.activeElement.getBoundingClientRect(),b=document.querySelector('.benchmark-guide').getBoundingClientRect();
+      return a.right<=b.left||a.left>=b.right||a.bottom<=b.top||a.top>=b.bottom;
+    });
+    await expect.poll(clear).toBe(true);
+    await form.getByRole('button',{name:'Browse Candidate artifact path',exact:true}).click();
+    await page.locator('.benchmark-picker').getByRole('button',{name:'Select file: candidate.whl',exact:true}).click();
+    await expect(guide).toBeVisible();
+    await form.locator('select[name="transport"]').selectOption('local');
+    await form.getByRole('button',{name:'Inspect candidate',exact:true}).focus();
+    await expect.poll(clear).toBe(true);
+    await page.keyboard.press('Enter');
+    await expect(form.locator('[role="status"]')).toContainText('Job submitted');
+    await expect(guide).toBeVisible();
+    await expect(guide.locator('[data-guide-status]')).toContainText('completed');
+    await page.locator('#benchmark-title').click();
+    await expect(guide).toBeVisible();
+    expect(state.posts).toHaveLength(1);
+    const otherField=page.locator('form[data-action="create"] input[name="model"]');
+    await otherField.focus();await otherField.fill('test-model');
+    await expect.poll(clear).toBe(true);
+    await expect(guide).toContainText('Step 2 of 5');
+    await guide.getByRole('button',{name:'Next',exact:true}).click();
+    await expect(guide).toContainText('Create a repeatable experiment');
+    const sha=page.locator('form[data-action="create"] input[name="candidate_sha"]');
+    await sha.focus();await sha.fill('a'.repeat(40));
+    await expect(sha).toHaveValue('a'.repeat(40));
+    await expect.poll(clear).toBe(true);
+    await expect(guide).toBeVisible();
+    await page.screenshot({path:`../../.agentops/persistent-guide-${width}.png`});
+    await page.setViewportSize({width:width===1280?390:1280,height:900});
+    await expect.poll(clear).toBe(true);
+    await expect(guide).toBeVisible();
+    await page.getByRole('button',{name:'Reviews',exact:true}).click();
+    await expect(guide).toBeHidden();
+    await page.getByRole('button',{name:'Benchmarking',exact:true}).click();
+    await expect(guide).toBeVisible();
+    await expect(guide).toContainText('Step 3 of 5');
+    await guide.getByRole('button',{name:'Close benchmark guide'}).click();
+    await expect(page.locator('#benchmark-view')).not.toHaveClass(/benchmark-tour-docked/);
+    expect(await page.locator('#benchmark-view').evaluate(root=>root.style.height)).toBe('');
+  });
+}

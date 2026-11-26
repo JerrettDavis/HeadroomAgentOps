@@ -17,9 +17,19 @@
 .benchmark-help-toggle[aria-pressed="false"] { color: var(--muted); box-shadow: none; }
 .benchmark-field-help { position: fixed; inset: auto; margin: 0; box-sizing: border-box; width: max-content; max-width: min(38ch, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); box-shadow: 0 4px 16px rgba(0, 0, 0, .18); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .benchmark-field-help:not(:popover-open) { display: none; }
-.benchmark-guide { width: min(38rem, calc(100vw - 2rem)); max-height: 85vh; overflow: auto; padding: 1.5rem; border-radius: 12px; background: var(--panel, #172333); color: var(--text, #eef4fa); border: 1px solid #64748b; }
-.benchmark-guide::backdrop { background: rgba(0, 0, 0, .65); }
+.benchmark-guide { position: fixed; inset: auto; margin: 0; box-sizing: border-box; width: min(340px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 16px; border-radius: 10px; background: var(--panel); color: var(--text); border: 1px solid var(--accent); box-shadow: 0 8px 28px rgba(0, 0, 0, .2); }
+.benchmark-guide:popover-open { display: flex; flex-direction: column; }
+.benchmark-guide [data-guide-content] { min-height: 0; overflow: auto; }
+.benchmark-guide > :not([data-guide-content]) { flex-shrink: 0; }
+.benchmark-tour-docked { scrollbar-width: none; }
+.benchmark-tour-docked::-webkit-scrollbar { display: none; }
+.benchmark-guide:not(:popover-open) { display: none; }
+.benchmark-tour-target { outline: 2px solid var(--accent); outline-offset: 3px; }
+.benchmark-guide .benchmark-heading { gap: 8px; flex-wrap: nowrap; }
+.benchmark-guide .benchmark-heading h3 { margin: 0; font-size: 14px; }
+.benchmark-guide [data-guide-progress] { margin: 8px 0; }
+.benchmark-guide [data-guide-status] { font-size: 12px; }
 .benchmark-guide p { max-width: 65ch; line-height: 1.6; }
-.benchmark-guide h4 { font-size: 1.15rem; margin-bottom: .5rem; }
-.benchmark-guide-actions { margin-top: 1.5rem; justify-content: flex-end; }
+.benchmark-guide h4 { font-size: 1rem; margin-bottom: .5rem; }
+.benchmark-guide-actions { gap: 6px; margin-top: 12px; justify-content: flex-end; }
 .benchmark-guide button:focus-visible, .benchmark-help-controls button:focus-visible { outline: 2px solid #69caff; outline-offset: 3px; }
