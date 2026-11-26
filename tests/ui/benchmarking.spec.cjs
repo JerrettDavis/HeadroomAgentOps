@@ -314,3 +314,19 @@ for (const width of [1280,390]) {
     expect(await page.locator('#benchmark-view').evaluate(root=>root.style.height)).toBe('');
   });
 }
+
+
+test('guide follows asynchronous job progress without interrupting form focus',async ({page})=>{
+  const state=await fixture(page,[{id:'running-inspection',action:'inspect',state:'running',created_at:1,paths:{}}]);
+  await page.getByRole('button',{name:'Benchmark help and guided tutorial'}).click();
+  const guide=page.getByRole('dialog',{name:'Benchmark guide',exact:true});
+  await guide.getByRole('button',{name:'Next',exact:true}).click();
+  const input=page.locator('form[data-action="inspect"] input[name="artifact"]');
+  await expect(input).toBeFocused();
+  await expect(guide.locator('[data-guide-status]')).toContainText('running');
+  state.jobs[0].state='completed';
+  await expect(guide.locator('[data-guide-status]')).toContainText('completed',{timeout:7000});
+  await expect(input).toBeFocused();
+  await expect(guide).toBeVisible();
+  expect(state.posts).toHaveLength(0);
+});
