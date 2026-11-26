@@ -267,10 +267,10 @@ def _spawn_tree(root, launched):
     owned = {}
     for run_id, identity in launched.items():
         state = owner_state(json.dumps(identity))
-        if state == 'unknown':
-            raise ValueError('Spawned process ownership became unobservable')
         if state != 'live':
-            continue
+            # A vanished wrapper is not proof that its child tree exited.
+            # Keep the partial journal and known identities for operator recovery.
+            raise ValueError('Spawned process root is missing or unobservable; descendants unresolved')
         matches = [p for p in observed if p['pid'] == identity['pid'] and
                    p['started'] == identity['started'] and p['host'] == identity['host'] and
                    p['role'] == 'coordinator' and p['run_id'] == run_id]
@@ -281,10 +281,21 @@ def _spawn_tree(root, launched):
         children = [p for p in observed if p['pid'] not in owned and
                     p['parent_pid'] in owned and p['role'] == 'coordinator' and
                     p['run_id'] == owned[p['parent_pid']]['run_id'] and
+                    _descendant_order(p, owned[p['parent_pid']]) and
                     owner_state(json.dumps(p)) == 'live']
         if not children:
             return list(owned.values())
         owned.update({p['pid']: p for p in children})
+
+
+def _descendant_order(child, parent):
+    """Reject historic parent PIDs and ambiguous process creation ordering."""
+    if child.get('host') != parent.get('host') or owner_state(json.dumps(parent)) != 'live':
+        raise ValueError('Parent process ownership became ambiguous')
+    values = [str(process.get('started', '')) for process in (parent, child)]
+    if any(not re.fullmatch(r'[1-9][0-9]*', value) for value in values):
+        raise ValueError('Process creation ordering cannot be verified')
+    return int(values[1]) >= int(values[0])
 
 
 def consume(launcher, handoff_path=None):
