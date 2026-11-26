@@ -2,10 +2,56 @@ import os
 import subprocess
 import sys
 import time
+import json
+import threading
+from urllib.request import Request, urlopen
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+
+def test_cancellation_does_not_wait_for_upstream_and_reserves_only_one_request(tmp_path, monkeypatch):
+    from agentops.benchmarks import tools
+    entered, release = threading.Event(), threading.Event()
+    calls, clients = [], []
+    monkeypatch.setattr(tools, 'available', lambda *args: {'available': True, 'python': sys.executable})
+    def provider(*args):
+        calls.append(args)
+        entered.set()
+        release.wait(2)
+        return {'model': 'model', 'usage': {'prompt_tokens': 1}, 'choices': []}
+    def execute(command, directory, env, log, timeout=180):
+        def send():
+            try:
+                request = Request(env['STUDIO_BASE_URL'] + '/chat/completions',
+                    data=json.dumps({'model': 'studio-model', 'messages': task['messages'], 'stream': False}).encode(),
+                    headers={'Authorization': 'Bearer ' + env['STUDIO_API_KEY'], 'Content-Type': 'application/json'})
+                with urlopen(request, timeout=4) as response:
+                    response.read()
+            except Exception:
+                pass  # Cancellation closes the gateway before the blocked request can reply.
+        client = threading.Thread(target=send)
+        clients.append(client)
+        client.start()
+        assert entered.wait(1)
+        # Concurrent retries must be rejected before reaching the provider.
+        send()
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(tools, '_execute', execute)
+    task = {'id': 'one', 'messages': [{'role': 'user', 'content': 'Say OK'}]}
+    start = time.monotonic()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            tools.attempt('inspect', provider, 'openai', 'model', task, tmp_path, {})
+        assert time.monotonic() - start < .8
+        assert len(calls) == 1
+        clients[0].join(timeout=.2)
+        assert not clients[0].is_alive(), 'gateway connection remained open after cancellation'
+    finally:
+        release.set()
+        for client in clients:
+            client.join(timeout=3)
 
 
 def test_harness_timeout_terminates_spawned_descendants(tmp_path):

@@ -11,12 +11,13 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import socket
 import shutil
 import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PINS = {'inspect': ('inspect-ai', '0.3.292'), 'aiperf': ('aiperf', '0.14.0')}
 INSPECT_TRANSPORT = 'openai==3.4.0'
@@ -147,14 +148,33 @@ def attempt(tool: str, request: callable, protocol: str, model: str, task: dict,
     directory.mkdir()
     credential = secrets.token_urlsafe(24)
     captured, violations = [], []
+    reservation = threading.Lock()
+    stopping = threading.Event()
+    connections = set()
     body = {'model': model, 'messages': task['messages'], 'temperature': 0,
             'max_tokens': task.get('max_tokens', 1024), 'stream': False}
 
     class Gateway(BaseHTTPRequestHandler):
+        def setup(self):
+            super().setup()
+            with reservation:
+                connections.add(self.connection)
+                if stopping.is_set():
+                    self.connection.close()
+
+        def finish(self):
+            try:
+                super().finish()
+            finally:
+                with reservation:
+                    connections.discard(self.connection)
+
         def log_message(self, *args):
             pass
 
         def reply(self, status, value):
+            if stopping.is_set():
+                return
             data = json.dumps(value).encode()
             self.send_response(status)
             self.send_header('Content-Type', 'application/json')
@@ -174,21 +194,33 @@ def attempt(tool: str, request: callable, protocol: str, model: str, task: dict,
                 if not 0 < size <= 1024 * 1024:
                     raise ValueError('Unsupported request size')
                 submitted = json.loads(self.rfile.read(size))
-                if (self.path != '/v1/chat/completions' or captured or violations or
-                        submitted.get('model') != 'studio-model' or
-                        submitted.get('messages') != task['messages'] or submitted.get('stream')):
-                    raise ValueError('Harness request differed from the planned single task')
-                # Reserve the request even on upstream failure: retries cannot incur extra charges.
-                captured.append({})
+                with reservation:
+                    if (stopping.is_set() or self.path != '/v1/chat/completions' or captured or violations or
+                            submitted.get('model') != 'studio-model' or
+                            submitted.get('messages') != task['messages'] or submitted.get('stream')):
+                        raise ValueError('Harness request differed from the planned single task')
+                    # Reserve before calling upstream: concurrent retries cannot incur extra charges.
+                    captured.append({})
                 start = time.perf_counter()
                 response = request('/v1/chat/completions', body)
-                captured[0].update(response=response, latency_ms=(time.perf_counter() - start) * 1000)
+                with reservation:
+                    if stopping.is_set():
+                        return
+                    captured[0].update(response=response, latency_ms=(time.perf_counter() - start) * 1000)
                 self.reply(200, response)
             except Exception:
-                violations.append('Harness gateway rejected a request or the provider request failed')
-                self.reply(502, {'error': violations[-1]})
+                with reservation:
+                    if stopping.is_set():
+                        return
+                    violations.append('Harness gateway rejected a request or the provider request failed')
+                try:
+                    self.reply(502, {'error': violations[-1]})
+                except (OSError, TimeoutError):
+                    pass
 
-    server = HTTPServer(('127.0.0.1', 0), Gateway)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Gateway)
+    server.daemon_threads = True
+    server.block_on_close = False
     server.timeout = 1
     # Bound incomplete HTTP clients rather than allowing shutdown to block forever.
     original_get = server.get_request
@@ -197,7 +229,7 @@ def attempt(tool: str, request: callable, protocol: str, model: str, task: dict,
         connection.settimeout(30)
         return connection, address
     server.get_request = get_request
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .05}, daemon=True)
     thread.start()
     env = _environment()
     env.update(STUDIO_BASE_URL=f'http://127.0.0.1:{server.server_port}/v1', STUDIO_API_KEY=credential)
@@ -222,6 +254,17 @@ def attempt(tool: str, request: callable, protocol: str, model: str, task: dict,
         if completed.returncode or violations or len(captured) != 1 or 'response' not in captured[0]:
             raise ValueError(f'{tool} execution failed; inspect private harness diagnostics')
     finally:
+        # An upstream callback may remain blocked until LocalAdapter tears down
+        # its proxy. Do not wait for it or let it publish late responses.
+        with reservation:
+            stopping.set()
+            pending = list(connections)
+        for connection in pending:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            connection.close()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
