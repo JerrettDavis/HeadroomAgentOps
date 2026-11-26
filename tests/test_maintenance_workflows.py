@@ -48,3 +48,35 @@ class MaintenanceWorkflowTests(unittest.TestCase):
             self.assertFalse(mechanical_update(path, 'o/r', {'number': 1, 'head_sha': 'new'}, 'old', 'newmain'))
             store.update('update', '1', {'equivalent': False})
             self.assertFalse(mechanical_update(path, 'o/r', {'number': 1, 'head_sha': 'new'}, 'old', 'main'))
+
+    def test_automation_reuses_rebased_review_but_keeps_new_author_evidence(self):
+        from test_automation import AutomationTests
+        from agentops.evidence import Evidence
+        with tempfile.TemporaryDirectory() as temp:
+            auto, launcher = AutomationTests().setup_auto(temp)
+            evidence = Evidence(Path(temp) / 'evidence')
+            previous = {'number': 2, 'head_sha': 'old', 'base_ref': 'main', 'base_sha': 'base',
+                        'head_repo': 'o/r', 'updated_at': 'old', 'files': [], 'comments': []}
+            proof = {'number': 2, 'head_sha': 'old', 'main_sha': 'base',
+                     'reviewed_pr_evidence': evidence.put(previous), 'actions': []}
+            prior = [{'id': 'analysis', 'head_sha': 'old', 'main_sha': 'base', 'state': 'reviewed',
+                      'result': {'evidence_record': evidence.put(proof)}}]
+            store = MaintenanceStore(Path(temp) / 'ledger.sqlite3', auto.data['repo'])
+            store.put('update', '2', {'number': 2, 'head_sha': 'old', 'new_head': 'new', 'main_sha': 'main',
+                                     'state': 'updated', 'equivalent': True, 'contribution': 'b' * 64,
+                                     'receipt': {'new_head': 'new'}})
+            current = {**previous, 'head_sha': 'new', 'updated_at': 'new'}
+            launcher.github.pull.return_value = current
+            self.assertFalse(auto.material_update(current, prior, 'main')['material'])
+            launcher.github.pull.return_value = {**current, 'comments': [{'id': 9, 'body': 'New concern'}]}
+            self.assertTrue(auto.material_update(current, prior, 'main')['material'])
+
+    def test_publication_receipt_race_does_not_start_extra_review(self):
+        from agentops.maintenance_workflows import mechanical_update
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'ledger'
+            store = MaintenanceStore(path, 'o/r')
+            store.put('update', '1', {'number': 1, 'head_sha': 'old', 'new_head': 'new', 'main_sha': 'main',
+                                     'state': 'publishing', 'equivalent': True, 'contribution': 'a' * 64,
+                                     'prepared': {'new_head': 'new', 'contribution': 'a' * 64}})
+            self.assertTrue(mechanical_update(path, 'o/r', {'number': 1, 'head_sha': 'new'}, 'old', 'main'))

@@ -18,10 +18,21 @@ class MaintenanceGit(GitStack):
         patch = self.git(['diff', '--no-ext-diff', '--no-textconv', '--binary', base, head], checkout)
         # Stable patch ID ignores hunk location and whitespace, so use a second
         # path/mode/content-line digest to preserve whitespace-only author edits.
-        meaningful = [line for line in patch.splitlines()
-                      if line.startswith(('+', '-', 'diff --git ', 'old mode ', 'new mode ',
-                                          'new file mode ', 'deleted file mode ', 'literal ', 'delta '))
-                      and not line.startswith(('+++ ', '--- '))]
+        meaningful, in_hunk, binary = [], False, False
+        for line in patch.splitlines():
+            if line.startswith('diff --git '):
+                in_hunk, binary = False, False
+                meaningful.append(line)
+            elif line.startswith('@@'):
+                in_hunk = True
+            elif line == 'GIT binary patch':
+                binary = True
+                meaningful.append(line)
+            elif binary or (in_hunk and line.startswith(('+', '-'))):
+                meaningful.append(line)
+            elif not in_hunk and line.startswith(('old mode ', 'new mode ', 'new file mode ',
+                    'deleted file mode ', 'rename from ', 'rename to ', 'copy from ', 'copy to ')):
+                meaningful.append(line)
         return hashlib.sha256('\n'.join(meaningful).encode()).hexdigest()
 
     def prepare(self, record):

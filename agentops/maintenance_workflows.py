@@ -16,10 +16,13 @@ def mechanical_update(path, repo, pr, previous_head, main_sha):
     while head != previous_head and head not in visited:
         visited.add(head)
         receipt = next((r for r in records if r.get('number') == pr['number']
-                       and r.get('new_head') == head and r.get('state') == 'updated'
+                       and r.get('new_head') == head and r.get('state') in ('updated', 'publishing')
                        and r.get('equivalent') is True and r.get('main_sha') == main_sha
                        and len(r.get('contribution', '')) == 64
-                       and (r.get('receipt') or {}).get('new_head') == head), None)
+                       and ((r.get('receipt') or {}).get('new_head') == head or
+                            (r.get('state') == 'publishing' and
+                             (r.get('prepared') or {}).get('new_head') == head and
+                             (r.get('prepared') or {}).get('contribution') == r.get('contribution')))), None)
         if not receipt:
             return False
         head = receipt['head_sha']

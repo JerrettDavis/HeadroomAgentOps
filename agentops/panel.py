@@ -323,11 +323,13 @@ def archived_diff(root, identity, expected_head, repository):
 
 
 def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=None, usage_identity_reader=None,
-                priority_monitor=None, stack_service=None, benchmark_service=None):
+                priority_monitor=None, stack_service=None, benchmark_service=None, maintenance_service=None):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise ValueError('The panel binds to loopback only')
     page = Path(__file__).with_name('panel.html')
     assets = {
+        '/ui/maintenance.js': (page.parent / 'ui' / 'maintenance.js', 'text/javascript; charset=utf-8'),
+        '/ui/maintenance.css': (page.parent / 'ui' / 'maintenance.css', 'text/css; charset=utf-8'),
         '/ui/benchmark-measured.js': (page.parent / 'ui' / 'benchmark-measured.js', 'text/javascript; charset=utf-8'),
         '/ui/benchmark-sources.js': (page.parent / 'ui' / 'benchmark-sources.js', 'text/javascript; charset=utf-8'),
         '/ui/benchmark-studio.js': (page.parent / 'ui' / 'benchmark-studio.js', 'text/javascript; charset=utf-8'),
@@ -349,6 +351,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
     from .launch import Launcher
     from .cli import DEFAULTS
     launcher = Launcher(path, config or DEFAULTS)
+    from .maintenance_service import MaintenanceService
+    maintenance = maintenance_service or MaintenanceService(path, launcher.config, launcher.github)
     from .merge_priority import PriorityMonitor, collect_priority
     comparisons = {}
     priority = priority_monitor or PriorityMonitor(lambda: collect_priority(launcher.github, comparisons))
@@ -407,6 +411,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                     result = launcher.launch(payload)
                 elif self.path == '/api/automation':
                     result = automation.configure(payload)
+                elif self.path.startswith('/api/maintenance/'):
+                    result = maintenance.dispatch(self.path.rsplit('/', 1)[-1], payload)
                 elif self.path == '/api/allowances':
                     result = allowances.configure(payload)
                 elif self.path == '/api/stacks/prepare':
@@ -471,6 +477,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
             except Exception:
                 status, result = 503, {'error': ('Benchmark operation unavailable. Refresh saved run status before retrying.'
                                                if self.path.startswith('/api/benchmarks') else
+                                               'Maintenance unavailable. Saved operation receipts are retained; refresh before retrying.'
+                                                if self.path.startswith('/api/maintenance/') else
                                                'Stack operation unavailable. Refresh saved stack status before retrying.'
                                                 if self.path.startswith('/api/stacks/') else
                                                 'Review launch unavailable. Check GitHub authentication and the panel configuration, then preview again.')}
@@ -507,6 +515,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                                    'processes': launcher.status()}).encode()
             elif url.path == '/api/merge-priority':
                 body = redact(json.dumps(priority.status(), ensure_ascii=False)).encode()
+            elif url.path == '/api/maintenance':
+                body = redact(json.dumps(maintenance.status(), ensure_ascii=False)).encode()
             elif url.path == '/api/benchmarks':
                 try:
                     body = redact(json.dumps(benchmarks().status(), ensure_ascii=False, allow_nan=False)).encode()
@@ -595,6 +605,7 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
     else:
         server = ThreadingHTTPServer((host, port), Handler)
     server.automation = automation
+    server.maintenance = maintenance
     return server
 
 
@@ -605,6 +616,8 @@ def serve(path, host='127.0.0.1', port=8765, config=None):
         import threading
         watcher = threading.Thread(target=server.automation.run, daemon=True, name='auto-review')
         watcher.start()
+        maintenance_watcher = threading.Thread(target=server.maintenance.run, daemon=True, name='maintenance-monitor')
+        maintenance_watcher.start()
         print(f'Reviewer panel: http://{host}:{server.server_port} (Ctrl+C to stop)', flush=True)
         try:
             server.serve_forever()
@@ -612,3 +625,4 @@ def serve(path, host='127.0.0.1', port=8765, config=None):
             pass
         finally:
             server.automation.stop.set()
+            server.maintenance.close()

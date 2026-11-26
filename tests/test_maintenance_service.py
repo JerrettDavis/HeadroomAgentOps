@@ -134,6 +134,31 @@ class MaintenanceServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.service.update_selected({'numbers': [1]})
 
+    def test_incident_exposes_queued_and_running_repair_state(self):
+        self.fail_main()
+        self.service.tick()
+        self.service.fix_main({})
+        self.assertEqual(self.service.status()['incidents'][0]['repair_state'], 'agent_queued')
+
+    def test_failed_rerun_reopens_resolved_incident(self):
+        self.fail_main()
+        self.service.tick()
+        self.github.runs[0]['conclusion'] = 'success'
+        self.service.tick()
+        self.assertFalse(self.service.status()['alert'])
+        self.github.runs[0]['conclusion'] = 'failure'
+        self.github.runs[0]['run_attempt'] = 2
+        self.service.tick()
+        self.assertTrue(self.service.status()['alert'])
+
+    def test_api_failure_keeps_prior_incident_and_marks_status_stale(self):
+        self.fail_main()
+        self.service.tick()
+        self.github.main_sha = lambda: (_ for _ in ()).throw(RuntimeError('offline'))
+        self.service.tick()
+        self.assertTrue(self.service.status()['alert'])
+        self.assertEqual(self.service.status()['monitor']['error'], 'offline')
+
 
 if __name__ == '__main__':
     unittest.main()

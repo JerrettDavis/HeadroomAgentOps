@@ -21,7 +21,26 @@ class MaintenanceService:
         self.lock, self.poll_lock = threading.Lock(), threading.Lock()
         self.owner = json.dumps(process_identity(), sort_keys=True)
         self.worker_thread = None
+        self.refresh_thread = None
         self.recover()
+
+    def dispatch(self, action, request):
+        actions = {'update': self.update_selected, 'remediate': self.remediate,
+                   'retry': self.retry, 'settings': self.configure, 'fix-main': self.fix_main}
+        if action == 'refresh':
+            if not self.refresh_thread or not self.refresh_thread.is_alive():
+                self.refresh_thread = threading.Thread(target=self.refresh, daemon=True,
+                                                       name='maintenance-inventory')
+                self.refresh_thread.start()
+        elif action in actions:
+            actions[action](request)
+        else:
+            raise ValueError('Unknown maintenance action')
+        if not self.worker_thread or not self.worker_thread.is_alive():
+            self.worker_thread = threading.Thread(target=self.process_pending, daemon=True,
+                                                  name='maintenance-work')
+            self.worker_thread.start()
+        return self.status()
 
     def recover(self):
         for kind in ('update', 'repair'):
@@ -64,7 +83,8 @@ class MaintenanceService:
                 'updates': [public(r) for r in updates],
                 'secondary': [public(r) for r in updates if r.get('state') in
                               ('needs_remediation', 'interrupted', 'agent_failed')],
-                'monitor': monitor, 'incidents': [public(r) for r in incidents],
+                'monitor': monitor, 'incidents': [public({**r, **({'repair_state': repair['state']}
+                    if (repair := self.store.get('repair', r['key'])) else {})}) for r in incidents],
                 'alert': settings['watch'] and not settings['autofix'] and bool(active)}
 
     def update_selected(self, request):
@@ -184,7 +204,8 @@ class MaintenanceService:
         self.store.put('monitor', 'main', {**health, 'last_poll': time.time(), 'error': None})
         if health['state'] == 'broken':
             self.store.claim('incident', sha, {'head_sha': sha, 'state': 'broken', 'created': time.time()})
-            self.store.update('incident', sha, {'failures': health['failures'], 'workflows': health['workflows']})
+            self.store.update('incident', sha, {'state': 'broken', 'failures': health['failures'],
+                                               'workflows': health['workflows']})
             if self.store.settings()['autofix']:
                 self.fix_main({'key': sha})
         elif health['state'] == 'healthy':
