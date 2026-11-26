@@ -85,12 +85,36 @@ class Publisher:
             if entry not in report['own_discussion_entries']:
                 report['own_discussion_entries'].append(entry)
         actions = list(result.get('actions', []))
+        findings = result.get('findings', [])
+        if findings:
+            live = prepared_current or read_pull(self.github, job['number'])
+            normalize = lambda value: re.sub(r'\s+', ' ', redact(value)).strip().lower()
+            known = normalize('\n'.join(item.get('body') or ''
+                                       for field in ('comments', 'reviews', 'review_comments')
+                                       for item in live.get(field, [])))
+            fresh_findings = [f for f in findings if f.get('novel', True) is not False
+                              and normalize(f['description']) not in known]
+            if not fresh_findings:
+                # A required decision is an internal obligation, not permission
+                # to repeat findings that the discussion already contains.
+                actor = self.github.authenticated_user()['login']
+                repeated_bodies = {normalize(f['description']) for f in findings}
+                repeated_bodies.add(normalize(determination(result, live['author'], actor)['body']))
+                actions = [a for a in actions if a['kind'] not in ('comment', 'review')
+                           or a.get('event') == 'APPROVE'
+                           or normalize(a.get('body', '')) not in repeated_bodies]
+            determination_result = {**result, 'findings': fresh_findings}
+        else:
+            determination_result = result
         if result.get('determination_required') and not any(a['kind'] == 'review' for a in actions):
             live = prepared_current or read_pull(self.github,job['number'])
             actor = self.github.authenticated_user()['login']
             if not has_determination(live, result, actor):
-                proposed=determination(result, live['author'], actor)
-                actions.append(proposed)
+                proposed=determination(determination_result, live['author'], actor)
+                if proposed.get('event') == 'APPROVE' and findings:
+                    pass  # Filtering old findings cannot qualify a new approval.
+                elif proposed.get('event') != 'COMMENT' or determination_result.get('findings'):
+                    actions.append(proposed)
         if result.get('require_decision') and not any(a['kind']=='review' and a.get('event') in
                                                     ('APPROVE','REQUEST_CHANGES') for a in actions):
             report['held'].append({'action':'final_review','reasons':['A qualified approval or concrete changes request is still required']})
@@ -200,33 +224,6 @@ class Publisher:
                 receipt = {'action': identity, 'reasons': list(dict.fromkeys(reasons))}
                 self.ledger.action_state(identity, 'held', receipt)
                 report['held'].append(receipt)
-                if (kind in ('comment', 'review') and current.get('state', 'open') == 'open'
-                        and (result.get('require_decision') or result.get('determination_required'))):
-                    # Publish the work without misrepresenting old evidence as a
-                    # current approval or a newly verified changes request.
-                    observation = {'kind': 'comment', 'body':
-                        f'Saved review of head `{job["head_sha"]}` against main `{job["main_sha"]}`.\n\n'
-                        'This records the completed analysis; it is not a current approval or '
-                        'a newly qualified changes request.\n\n' + action['body'] +
-                        '\n\nThe current revision, discussion and qualification must be rechecked '
-                        'before publishing a current review decision.'}
-                    observation_id = self.ledger.intent(job['id'], observation)
-                    observation_record = self.ledger.action(observation_id)
-                    observation_marker = f'<!-- headroom-agentops:{observation_id} -->'
-                    observed = (observation_record['receipt'] if observation_record['state'] == 'sent'
-                                else self._find_receipt(raw_current, observation_marker, observation, actor))
-                    if not observed and observation_record['state'] != 'sending':
-                        self.ledger.action_state(observation_id, 'sending')
-                        try:
-                            observed = self.github.request('POST',
-                                f'repos/{job["repo"]}/issues/{job["number"]}/comments',
-                                {'body': redact(observation['body']) + '\n\n' + observation_marker})
-                        except RejectedWrite as exc:
-                            self.ledger.action_state(observation_id, 'failed', {'reason': str(exc)})
-                    if observed:
-                        self.ledger.action_state(observation_id, 'sent', observed)
-                        report['sent'].append(observed)
-                        remember(observation, observation_id, observed)
                 continue
             before = None
             if kind == 'ci':
