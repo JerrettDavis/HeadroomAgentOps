@@ -23,6 +23,27 @@ def fixture_design(tmp_path):
     return design
 
 
+def test_frozen_group_never_reads_later_task_or_feature_catalogue_changes(tmp_path,monkeypatch):
+    import copy
+    import agentops.benchmark_groups as groups
+    from test_benchmark_core import manifest as sample_manifest
+    design=fixture_design(tmp_path)
+    plan=freeze(design,BenchmarkService(tmp_path/'ledger.sqlite'))
+    original=copy.deepcopy(next(s['tasks'] for s in groups.SCENARIOS if s['id']=='smoke'))
+    monkeypatch.setattr(groups,'SCENARIOS',copy.deepcopy(groups.SCENARIOS))
+    monkeypatch.setattr(groups,'FEATURES',copy.deepcopy(groups.FEATURES))
+    next(s for s in groups.SCENARIOS if s['id']=='smoke')['tasks'][0]['messages'][0]['content']='Changed after review'
+    next(f for f in groups.FEATURES if f['id']=='default')['args']=['--changed-after-review']
+    sample=sample_manifest()
+    observed={'agent':plan['engine_identity'],'environment':sample['environment'],
+        'runtime':{'rollout_registry_digest':sample['rollout']['registry_digest'],
+                   'rollout_snapshot_digest':sample['rollout']['snapshot_digest']}}
+    manifest=groups._native_manifest(plan,plan['cells'][0],'candidate',observed)
+    assert manifest['tasks']==original
+    assert groups._config(plan,plan['cells'][0],{},'candidate')['proxy_args']==[]
+    assert plan['tasksets']['smoke']['digest']==digest(original)
+
+
 def test_real_group_freezes_sources_and_writes_hashed_paired_cell_evidence(tmp_path):
     design=fixture_design(tmp_path)
     service=BenchmarkService(tmp_path/'ledger.sqlite')
@@ -149,3 +170,29 @@ def test_external_tool_group_records_genuine_pinned_harness_telemetry(tmp_path,t
     assert all('native_logs' not in row['tool_metrics'] for row in attempts)
     assert list((tmp_path/'group').glob('cells/*/results/tool-evidence/harness-*'))
     assert result['decision']['status']=='inconclusive'
+
+
+def test_concurrent_load_group_retains_native_identities_and_measured_batch_evidence(tmp_path):
+    runtime=os.environ.get('HEADROOM_BENCH_TOOL_PYTHON')
+    if not runtime or not Path(runtime).is_file():
+        pytest.skip('Set HEADROOM_BENCH_TOOL_PYTHON to the pinned harness environment')
+    from agentops.benchmarks.tools import available
+    if not available('aiperf',{'python':runtime})['available']:
+        pytest.skip('Optional pinned AIPerf runtime unavailable')
+    design=fixture_design(tmp_path)
+    config=Path(design['runner']['config_path']);data=json.loads(config.read_text())
+    data['tool_python']=runtime;config.write_text(json.dumps(data))
+    design.update(tools=['aiperf'],load_concurrency=[2])
+    result=run_group(freeze(design,BenchmarkService(tmp_path/'ledger.sqlite')),tmp_path/'group')
+    cell=result['cells'][0]
+    assert cell['state']=='completed',cell
+    assert cell['concurrency']==2
+    evidence=cell['evidence']
+    assert evidence['identity_verification']['status']=='pass'
+    assert len(evidence['attempts'])==10
+    assert {a['tokens'] for a in evidence['attempts']}=={70,100}
+    assert len(evidence['load_batches'])==2
+    assert {b['completed_requests'] for b in evidence['load_batches']}=={5}
+    assert all(b['requests_per_second']>0 for b in evidence['load_batches'])
+    assert all('native_logs' not in b for b in evidence['load_batches'])
+    assert result['lane']=='simulator' and result['decision']['status']=='inconclusive'

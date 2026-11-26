@@ -32,7 +32,29 @@ def freeze(payload,service):
             'design':design,'resolved':report['resolved'],'cells':report['cells'],
             'lane':report['lane'],'charges':report['charges'],'config_digest':digest(load_config(path)),
             'tool_versions':{tool:runtime['version'] for tool,runtime in report['tool_runtimes'].items()},
-            'tool_runtimes':report['tool_runtimes'],'engine_identity':agent_identity(),'scenario_version':1}
+            'tool_runtimes':report['tool_runtimes'],'engine_identity':agent_identity(),'scenario_version':1,
+            'policy_digest':digest(design['policy']),
+            'tasksets':{s['id']:{'revision':1,'tasks':copy.deepcopy(s['tasks']),'digest':digest(s['tasks'])}
+                        for s in SCENARIOS if s['id'] in design['scenarios']},
+            'feature_configs':{f['id']:copy.deepcopy(f) for f in report['resolved']['candidate']['feature_schema']
+                               if f['id'] in design['features']}}
+
+
+def _validate_pins(plan):
+    design=plan['design']
+    if (set(plan.get('tasksets',{}))!=set(design['scenarios'])
+            or set(plan.get('feature_configs',{}))!=set(design['features'])
+            or plan.get('policy_digest')!=digest(design['policy'])):
+        raise ValueError('Saved group lacks immutable task/feature pins; edit a new experiment copy')
+    for taskset in plan['tasksets'].values():
+        if taskset.get('revision')!=plan['scenario_version'] or taskset.get('digest')!=digest(taskset.get('tasks')):
+            raise ValueError('Pinned taskset content differs from its digest')
+    for feature in plan['feature_configs'].values():
+        if not isinstance(feature.get('args'),list) or any(not isinstance(arg,str) for arg in feature['args']):
+            raise ValueError('Invalid pinned feature configuration')
+    requests=sum(len(plan['tasksets'][cell['scenario']]['tasks']) for cell in plan['cells'])*design['repeats']*2
+    if requests>1200 or len(plan['cells'])>24:
+        raise ValueError('Pinned experiment exceeds its 24-cell or 1200-request budget')
 
 
 def _write(directory,state):
@@ -73,6 +95,8 @@ def prepare_recovery(payload,service):
     if digest(plan)!=job.get('group_input_digest'):
         raise ValueError('Previous group input could not be verified')
     from .benchmarks.environment import agent_identity
+    if payload['mode']=='retry':
+        _validate_pins(plan)
     if payload['mode']=='retry' and agent_identity()!=plan['engine_identity']:
         raise ValueError('Benchmark engine changed; edit a new experiment copy instead of mixing engine versions')
     result=_verified(previous) if (previous/'summary.json').is_file() else None
@@ -165,7 +189,7 @@ def _collect_cell(cell,directory):
         if evidence['manifest_digest']!=digest(manifest):
             raise ValueError('Collected run does not match its pinned manifest')
         return dict(cell,state='cancelled' if evidence.get('cancelled') else 'completed',
-                    manifest_digest=digest(manifest),evidence_sha256=digest(evidence),decision=decision,
+                    manifest=manifest,manifest_digest=digest(manifest),evidence_sha256=digest(evidence),decision=decision,
                     evidence=evidence,collected=True)
     except (OSError,ValueError,KeyError):
         return dict(cell,state='recoverable',error='Existing remote run has no verified terminal evidence yet; no requests were restarted')
@@ -208,9 +232,13 @@ def _config(plan,cell,base_config,source_key):
         # An explicit selected provider must override ambient proxy defaults.
         args+=['--backend','bedrock']
     if source_key=='candidate':
-        args+=next(f['args'] for f in FEATURES if f['id']==cell['feature'])
+        args+=plan['feature_configs'][cell['feature']]['args']
     config['proxy_args']=args
     config['benchmark_tool']=cell['tool']
+    if cell.get('concurrency'):
+        config['load_concurrency']=cell['concurrency']
+    else:
+        config.pop('load_concurrency',None)
     runtime=plan.get('tool_runtimes',{}).get(cell['tool'],{})
     if cell['tool']!='native' and runtime.get('python'):
         config['tool_python']=runtime['python']
@@ -223,7 +251,7 @@ def _native_manifest(plan,cell,source_key,observed):
     design=plan['design']
     if observed['agent']!=plan['engine_identity']:
         raise ValueError('Benchmark engine changed after preflight; create a new experiment plan')
-    tasks=next(s['tasks'] for s in SCENARIOS if s['id']==cell['scenario'])
+    tasks=copy.deepcopy(plan['tasksets'][cell['scenario']]['tasks'])
     source=plan['resolved'][source_key]
     manifest={'schema_version':1,'experiment_id':design['label']+' / '+cell['id'],
               'seed':design['seed'],'repeats':design['repeats'],
@@ -300,7 +328,7 @@ def _cell(plan,cell,directory,artifact,base_config):
         return dict(cell,state='recoverable' if recoverable else 'failed',
                     error='No verified terminal cell evidence. Collect existing remote receipts before retrying requests.')
     return dict(cell,state='cancelled' if evidence.get('cancelled') else 'completed',
-                manifest_digest=digest(manifest),evidence_sha256=digest(evidence),
+                manifest=manifest,manifest_digest=digest(manifest),evidence_sha256=digest(evidence),
                 decision=decision,evidence=evidence)
 
 
@@ -316,6 +344,8 @@ def run_group(plan,directory):
         if existing['group_manifest_digest']!=digest(plan):
             raise ValueError('Existing group belongs to a different immutable plan')
         return existing
+    if plan.get('recovery',{}).get('mode')!='collect':
+        _validate_pins(plan)
     from .benchmarks.environment import agent_identity
     if plan.get('recovery',{}).get('mode')!='collect' and agent_identity()!=plan['engine_identity']:
         raise ValueError('Benchmark engine changed after preflight; no requests were started')
@@ -392,7 +422,9 @@ def run_group(plan,directory):
     result={'schema_version':1,'kind':'studio-experiment-group','experiment_id':design['label'],
             'created_at':datetime.now(UTC).isoformat(),'group_manifest_digest':digest(plan),
             'design':design,'sources':plan['resolved'],'tool_versions':plan['tool_versions'],
-            'cells':cells,'decision':decision,'lane':plan['lane'],'cancelled':cancelled}
+            'cells':cells,'decision':decision,'lane':plan['lane'],'cancelled':cancelled,
+            'tasksets':plan.get('tasksets',{}),'feature_configs':plan.get('feature_configs',{}),
+            'policy_digest':plan.get('policy_digest')}
     path=write_evidence(result,directory)
     save_json(directory/'summary.json',{'status':decision['status'],'lane':plan['lane'],
                                       'result_file':path.name,'result_sha256':digest(result)})

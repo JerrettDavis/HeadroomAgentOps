@@ -15,6 +15,7 @@
   const models={};const filters={};
 let comparison=null,comparisonId='',comparisonVersion=0;
 let savedDesigns=[];
+let sourceCapabilities=null;
   const terminal=new Set(['completed','cancelled','failed','interrupted','recoverable']);
   async function request(path,payload){
     const auth=await fetch('/api/launcher');if(!auth.ok)throw Error('Dashboard authentication unavailable. Refresh and try again.');
@@ -60,6 +61,8 @@ let savedDesigns=[];
       if(step===2){
         panel.innerHTML=`<p class="studio-eyebrow">02 / EXPERIMENT MATRIX</p><h3>Select what to measure</h3><fieldset><legend>Providers and models</legend>${design.targets.map((t,i)=>`<div class="measured-target" data-target-row="${i}"><label class="studio-input">Provider ${i+1}<select data-target-provider="${i}">${catalogue.providers.map(p=>`<option value="${p.id}" ${p.id===t.provider?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label><label class="studio-input">Model ID ${i+1}<input data-target-model="${i}" list="measured-models-${i}" value="${esc(t.model)}" placeholder="Pinned model version"><datalist id="measured-models-${i}">${(models[t.provider]?.models||[]).map(m=>`<option value="${esc(m.id)}">${esc(m.name||m.id)}</option>`).join('')}</datalist></label>${t.provider==='azure'?`<label class="studio-input">Azure deployment ${i+1}<input data-target-request="${i}" value="${esc(t.request_model||'')}"></label>`:''}<button type="button" data-load-models="${i}">Load models for target ${i+1}</button>${design.targets.length>1?`<button type="button" data-remove-target="${i}">Remove target ${i+1}</button>`:''}<small>${esc(models[t.provider]?.message||catalogue.providers.find(p=>p.id===t.provider).model_hint)}</small></div>`).join('')}<button type="button" data-add-target>Add provider/model target</button></fieldset><fieldset><legend>Scenarios</legend><div class="studio-options">${choices(catalogue.scenarios,'scenarios')}</div></fieldset><fieldset><legend>Feature variants</legend><div class="studio-options">${choices(catalogue.features,'features')}</div><p class="studio-note">Each variant runs as a separate cell. Preflight checks CLI capabilities declared by the actual selected wheel; unsupported features cannot launch.</p></fieldset><fieldset><legend>Benchmark tools</legend><div class="studio-options">${choices(catalogue.tools,'tools')}</div><div class="studio-actions">${design.tools.filter(t=>t!=='native').map(t=>`<button type="button" data-prepare-runtime="${t}" ${active?'disabled':''}>Prepare ${esc(catalogue.tools.find(x=>x.id===t).name)} on ${esc(design.runner.transport)}</button>`).join('')}</div><p class="studio-note">Tool preparation installs pinned packages only after you choose Prepare. Docker preparation creates a new image; SSH preparation uses a managed remote environment. No provider requests are sent by setup.</p></fieldset><div class="studio-numbers">${input('repeats','Measured repeats',design.repeats,'number')}${input('seed','Measured seed',design.seed,'number')}</div><details><summary>Decision thresholds</summary><div class="studio-numbers">${input('minimum_savings','Minimum token savings (%)',design.policy.minimum_savings*100,'number')}${input('maximum_accuracy_regression','Maximum accuracy regression (%)',design.policy.maximum_accuracy_regression*100,'number')}${input('maximum_latency_ratio','Maximum latency ratio',design.policy.maximum_latency_ratio,'number')}${input('minimum_accuracy','Minimum success rate (%)',design.policy.minimum_accuracy*100,'number')}</div></details>`;
       }
+      if(step===2)panel.insertAdjacentHTML('beforeend',`<details ${(design.load_concurrency||[]).length?'open':''}><summary>Concurrent AIPerf load</summary>${input('load_concurrency','Load concurrency levels',(design.load_concurrency||[]).join(', '))}<p>Enter comma-separated levels, such as 1, 2, 4. Each level sends the selected repeat count per arm. Select only AIPerf and OpenAI/Azure targets with a same-build passthrough baseline. Leave empty for single-request paired execution.</p></details>`);
+      if(step===2)panel.insertAdjacentHTML('beforeend',`<section class="measured-task-previews"><h4>Scenario tasks and expected evidence</h4>${catalogue.scenarios.map(s=>`<details><summary>Preview ${esc(s.name)} tasks</summary>${(s.preview||[]).map(task=>`<h5>${esc(task.id)}</h5>${task.messages.map(message=>`<p>${esc(message.role)}</p><pre tabindex="0">${esc(message.content)}</pre>`).join('')}<p>Expected answer: ${esc(task.expected)}</p><p>Evidence: provider-reported input tokens, request latency and exact-answer task success.</p>`).join('')}</details>`).join('')}</section>`);
       if(step===3)renderPreflight(panel);
       if(step===4)renderResults(panel);
     }
@@ -71,7 +74,17 @@ let savedDesigns=[];
     }
     renderHistory();
   }
-  function choices(items,key){return items.map(item=>`<label class="studio-choice"><input type="checkbox" aria-label="${esc(item.name)}" aria-describedby="measured-choice-${key}-${item.id}" data-m-choice="${key}" value="${item.id}" ${design[key].includes(item.id)?'checked':''} ${item.available===false?'disabled':''}><span><strong>${esc(item.name)}</strong><small id="measured-choice-${key}-${item.id}">${esc(item.description||item.reason||'Available on the selected runner')}</small></span></label>`).join('');}
+  function choices(items,key){
+    if(key==='features'&&sourceCapabilities)items=items.map(item=>{
+      const declared=sourceCapabilities.features.find(f=>f.id===item.id),schema=declared?.configuration_schema;
+      const supported=sourceCapabilities.supported_features.includes(item.id);
+      return {...item,name:schema?.title||item.name,
+        available:supported||design.features.includes(item.id),
+        description:supported?(schema?.description||item.description)+(schema?' Boolean override; allowed values: false, true.':''):
+          'Unavailable in the selected build configuration schema. Uncheck this variant or select a compatible build.'};
+    });
+    return items.map(item=>`<label class="studio-choice"><input type="checkbox" aria-label="${esc(item.name)}" aria-describedby="measured-choice-${key}-${item.id}" data-m-choice="${key}" value="${item.id}" ${design[key].includes(item.id)?'checked':''} ${item.available===false?'disabled':''}><span><strong>${esc(item.name)}</strong><small id="measured-choice-${key}-${item.id}">${esc(item.description||item.reason||'Available on the selected runner')}</small></span></label>`).join('');
+  }
   function capture(){
     if(!design)return;
     if(value('label')!==undefined)design.label=value('label');
@@ -98,14 +111,51 @@ let savedDesigns=[];
       if(inputs.length)design[key]=[...inputs].filter(i=>i.checked).map(i=>i.value);
     }
     for(const key of ['repeats','seed'])if(value(key)!==undefined)design[key]=Number(value(key));
+    if(value('load_concurrency')!==undefined)design.load_concurrency=value('load_concurrency').trim()?value('load_concurrency').split(',').map(v=>Number(v.trim())):[];
     for(const key of ['minimum_savings','maximum_accuracy_regression','maximum_latency_ratio','minimum_accuracy'])if(value(key)!==undefined)design.policy[key]=Number(value(key))/(key==='maximum_latency_ratio'?1:100);
+  }
+  function validateFields(){
+    root.querySelectorAll('[data-field-error]').forEach(node=>node.remove());
+    root.querySelectorAll('[aria-invalid="true"]').forEach(input=>{
+      input.removeAttribute('aria-invalid');
+      const ids=(input.getAttribute('aria-describedby')||'').split(' ').filter(id=>!id.startsWith('measured-field-error-'));
+      if(ids.length)input.setAttribute('aria-describedby',ids.join(' '));else input.removeAttribute('aria-describedby');
+    });
+    let first=null,count=0;
+    const error=(input,message)=>{
+      if(!input)return;
+      const note=document.createElement('p');note.id='measured-field-error-'+(++count);note.dataset.fieldError='';note.className='measured-field-error';note.setAttribute('role','alert');note.textContent=message;
+      input.setAttribute('aria-invalid','true');input.setAttribute('aria-describedby',((input.getAttribute('aria-describedby')||'')+' '+note.id).trim());
+      (input.closest('label')||input).insertAdjacentElement('afterend',note);first??=input;
+    };
+    if(step===1){
+      if(!design.label.trim())error(root.querySelector('[data-m-setting="label"]'),'Enter an experiment name.');
+      for(const key of ['candidate','baseline']){
+        const source=design[key];
+        if(source.kind==='prepared'&&!source.job_id)error(root.querySelector(`[data-source-job="${key}"]`),'Choose a verified prepared wheel.');
+        if(source.kind==='local'){
+          if(!source.artifact)error(root.querySelector(`[data-m-setting="${key}-artifact"]`),'Choose the wheel to run.');
+          if(!/^[a-f0-9]{40}$/.test(source.sha))error(root.querySelector(`[data-m-setting="${key}-sha"]`),'Enter the full 40-character commit SHA.');
+        }
+      }
+    }
+    if(step===2){
+      design.targets.forEach((target,index)=>{if(!target.model.trim())error(root.querySelector(`[data-target-model="${index}"]`),'Enter the pinned model identifier.');});
+      if(!Number.isInteger(design.repeats)||design.repeats<5||design.repeats>100)error(root.querySelector('[data-m-setting="repeats"]'),'Choose 5 to 100 requests per arm.');
+      if(!Number.isInteger(design.seed)||design.seed<0||design.seed>4294967295)error(root.querySelector('[data-m-setting="seed"]'),'Enter an integer seed from 0 to 4294967295.');
+      const levels=design.load_concurrency||[];
+      if(levels.length>8||levels.some(n=>!Number.isInteger(n)||n<1||n>Math.min(64,design.repeats))||new Set(levels).size!==levels.length)
+        error(root.querySelector('[data-m-setting="load_concurrency"]'),'Choose unique concurrency levels from 1 to the request count, with a maximum of 64.');
+    }
+    if(first){status('Correct the highlighted settings to continue.');first.focus();return false;}
+    return true;
   }
   function renderPreflight(panel){
     const cells=report?.cells||[];
-    panel.innerHTML=`<p class="studio-eyebrow">03 / CHECK AND REVIEW</p><h3>Review every planned cell</h3><p class="studio-count">${cells.length} cells · ${report?.requests||0} provider requests</p><p class="studio-note">${report?.charges===false?'Offline fixture · no provider charges':esc(report?.notice||'Measured requests can incur provider charges.')}</p><div class="studio-matrix">${cells.map(c=>`<article>${recovering?`<label><input type="checkbox" data-m-retry-cell="${esc(c.id)}" ${retryCells.has(c.id)?'checked':''}> Retry ${esc(c.scenario)} / ${esc(c.model)}</label>`:''}<span>${esc(c.scenario)} · ${esc(c.feature)}</span><strong>${esc(c.provider)} / ${esc(c.model)}</strong><small>${esc(c.tool)} · ${design.repeats} baseline/candidate pairs</small></article>`).join('')}</div><h4>Pinned sources</h4><div class="measured-source-grid">${Object.entries(report?.resolved||{}).map(([key,source])=>`<article class="studio-source"><strong>${esc(key)}</strong><p><code>${esc(source.sha)}</code></p><small>${esc(source.provenance?.strategy||'local')}</small><p>Wheel <code>${esc(source.artifact_sha256)}</code></p></article>`).join('')}</div><h4>Preflight checks</h4><ul class="measured-checks">${(report?.checks||[]).map(c=>`<li data-ready="${c.ready}"><strong>${c.ready?'Ready':'Needs attention'}</strong> ${esc(c.description)}</li>`).join('')}</ul><p>Sources and configuration are reverified when the group is submitted. Cells run sequentially with a saved manifest and hashed evidence for each comparison.</p><button type="button" data-m-preflight>Recheck preflight</button>${recovering?recoveryActions():`<button type="button" data-m-launch ${!report?.ready||active||busy?'disabled':''}>Run measured experiment</button>`}`;
+    panel.innerHTML=`<p class="studio-eyebrow">03 / CHECK AND REVIEW</p><h3>Review every planned cell</h3><p class="studio-count">${cells.length} cells · ${report?.requests||0} provider requests</p><p class="studio-note">${report?.charges===false?'Offline fixture · no provider charges':esc(report?.notice||'Measured requests can incur provider charges.')}</p><div class="studio-matrix">${cells.map(c=>`<article>${recovering?`<label><input type="checkbox" data-m-retry-cell="${esc(c.id)}" ${retryCells.has(c.id)?'checked':''}> Retry ${esc(c.scenario)}${loadCaption(c)} / ${esc(c.model)}</label>`:''}<span>${esc(c.scenario)}${loadCaption(c)} · ${esc(c.feature)}</span><strong>${esc(c.provider)} / ${esc(c.model)}</strong><small>${esc(c.tool)} · ${design.repeats} baseline/candidate pairs</small></article>`).join('')}</div><h4>Pinned sources</h4><div class="measured-source-grid">${Object.entries(report?.resolved||{}).map(([key,source])=>`<article class="studio-source"><strong>${esc(key)}</strong><p><code>${esc(source.sha)}</code></p><small>${esc(source.provenance?.strategy||'local')}</small><p>Wheel <code>${esc(source.artifact_sha256)}</code></p></article>`).join('')}</div><h4>Preflight checks</h4><ul class="measured-checks">${(report?.checks||[]).map(c=>`<li data-ready="${c.ready}"><strong>${c.ready?'Ready':'Needs attention'}</strong> ${esc(c.description)}</li>`).join('')}</ul><p>Sources and configuration are reverified when the group is submitted. Cells run sequentially with a saved manifest and hashed evidence for each comparison.</p><button type="button" data-m-preflight>Recheck preflight</button>${recovering?recoveryActions():`<button type="button" data-m-launch ${!report?.ready||active||busy?'disabled':''}>Run measured experiment</button>`}`;
   }
   function renderHistory(){
-    root.querySelector('[data-measured-history]').innerHTML=`<h3>Measured experiment history</h3>${groups.length?groups.map(g=>`<article class="measured-history-item"><div class="studio-section-title"><div><strong>${esc(g.label||g.id.slice(0,8))}</strong><small>${esc(g.group_state)} · ${esc(typeof g.created_at==='number'?new Date(g.created_at*1000).toLocaleString():g.created_at)}</small></div>${g.state==='completed'||g.state==='cancelled'?`<button type="button" data-open-group="${esc(g.id)}">Explore experiment ${esc(g.id.slice(0,8))}</button>`:!terminal.has(g.state)?`<button type="button" data-cancel-group="${esc(g.id)}">Cancel measured experiment</button>`:`<button type="button" data-recover-group="${esc(g.id)}">Review stopped experiment ${esc(g.id.slice(0,8))}</button>`}</div>${g.cells.length?`<div class="measured-cell-progress">${g.cells.map(c=>`<span data-cell-state="${esc(c.state)}">${esc(c.scenario)} · ${esc(c.provider)} · ${esc(c.feature)}: <strong>${esc(c.state)}</strong></span>`).join('')}</div>`:''}</article>`).join(''):'<p>No measured groups yet. Choose a template and preflight your sources to begin.</p>'}`;
+    root.querySelector('[data-measured-history]').innerHTML=`<h3>Measured experiment history</h3>${groups.length?groups.map(g=>`<article class="measured-history-item"><div class="studio-section-title"><div><strong>${esc(g.label||g.id.slice(0,8))}</strong><small>${esc(g.group_state)} · ${esc(typeof g.created_at==='number'?new Date(g.created_at*1000).toLocaleString():g.created_at)}</small></div>${g.state==='completed'||g.state==='cancelled'?`<button type="button" data-open-group="${esc(g.id)}">Explore experiment ${esc(g.id.slice(0,8))}</button>`:!terminal.has(g.state)?`<button type="button" data-cancel-group="${esc(g.id)}">Cancel measured experiment</button>`:`<button type="button" data-recover-group="${esc(g.id)}">Review stopped experiment ${esc(g.id.slice(0,8))}</button>`}</div>${g.cells.length?`<div class="measured-cell-progress">${g.cells.map(c=>`<span data-cell-state="${esc(c.state)}">${esc(c.scenario)}${loadCaption(c)} · ${esc(c.provider)} · ${esc(c.feature)}: <strong>${esc(c.state)}</strong></span>`).join('')}</div>`:''}</article>`).join(''):'<p>No measured groups yet. Choose a template and preflight your sources to begin.</p>'}`;
     renderSetups();
   }
   function renderSetups(){
@@ -117,6 +167,24 @@ let savedDesigns=[];
   }
   function average(values){return values.length?values.reduce((a,b)=>a+b,0)/values.length:null;}
   function number(value){return Number.isFinite(value)?value.toFixed(1):'—';}
+  function loadCaption(cell){return cell.concurrency?' · '+esc(cell.concurrency)+' concurrent':'';}
+  function taskOutcomes(cells){
+    const rates=cell=>{
+      const arms=cell.evidence?.schema_version===2?['baseline','candidate']:['a1_passthrough','b_headroom'];
+      return arms.map(arm=>{
+        const samples=(cell.evidence?.attempts||[]).filter(a=>a.arm===arm&&typeof a.success==='boolean');
+        return samples.length?samples.filter(a=>a.success).length/samples.length*100:null;
+      });
+    };
+    const policy=result.design?.policy;
+    return `<section><h4>Task outcomes and thresholds</h4><p>Success measures the expected answer for these tasks.</p>${policy?`<p>Minimum token savings: ${number(policy.minimum_savings*100)}%. Minimum task success: ${number(policy.minimum_accuracy*100)}%. Maximum accuracy regression: ${number(policy.maximum_accuracy_regression*100)} percentage points. Maximum latency ratio: ${number(policy.maximum_latency_ratio)}.</p>`:''}<div class="studio-table"><table aria-label="Task outcome summary"><thead><tr><th>Scenario / target / feature</th><th>Baseline success</th><th>Candidate success</th><th>Change (percentage points)</th></tr></thead><tbody>${cells.map(cell=>{const [baseline,candidate]=rates(cell);return `<tr><th>${esc(cell.scenario)} / ${esc(cell.provider)} / ${esc(cell.model)} / ${esc(cell.feature)}${loadCaption(cell)}</th><td>${number(baseline)}%</td><td>${number(candidate)}%</td><td>${number(baseline!==null&&candidate!==null?candidate-baseline:null)}</td></tr>`;}).join('')}</tbody></table></div></section>`;
+  }
+  function loadResults(cells){
+    const rows=cells.flatMap(cell=>(cell.evidence?.load_batches||[]).map(batch=>({cell,batch})));
+    if(!rows.length)return '';
+    const maximum=Math.max(1,...rows.map(row=>row.batch.requests_per_second));
+    return `<section><h4>Measured load throughput</h4><p>The measurement window runs from the first upstream request dispatch through the last completion. Tool startup is excluded. Each concurrency level is measured independently.</p><div class="studio-chart" role="img" aria-label="Measured requests per second by concurrency and arm">${rows.map(({cell,batch})=>`<div class="studio-chart-row"><strong>${esc(cell.scenario)} / ${esc(cell.provider)} / ${esc(cell.model)}${loadCaption(cell)} / ${esc(batch.arm)}</strong><div class="studio-bar-line"><svg viewBox="0 0 510 12" aria-hidden="true"><rect class="${batch.arm==='b_headroom'?'studio-bar-candidate':'studio-bar-baseline'}" width="${batch.requests_per_second/maximum*510}" height="12"/></svg><span>${number(batch.requests_per_second)} req/s</span></div></div>`).join('')}</div><div class="studio-table"><table aria-label="Measured load throughput"><thead><tr><th>Scenario / target / feature</th><th>Concurrency</th><th>Arm</th><th>Completed requests</th><th>Window (s)</th><th>Requests / s</th><th>Input tokens</th></tr></thead><tbody>${rows.map(({cell,batch})=>`<tr><th>${esc(cell.scenario)} / ${esc(cell.provider)} / ${esc(cell.model)} / ${esc(cell.feature)}</th><td>${esc(batch.concurrency)}</td><td>${esc(batch.arm)}</td><td>${esc(batch.completed_requests)}</td><td>${number(batch.elapsed_seconds)}</td><td>${number(batch.requests_per_second)}</td><td>${number(batch.prompt_tokens)}</td></tr>`).join('')}</tbody></table></div></section>`;
+  }
   function distributions(cells){
     return cells.map(cell=>{
       const summaries=[];
@@ -137,7 +205,7 @@ let savedDesigns=[];
     const options=groups.filter(g=>g.id!==selected&&['completed','cancelled'].includes(g.state));
     const selector=`<label class="studio-input">Compare with saved experiment<select data-m-compare aria-label="Compare with saved experiment"><option value="">Choose a saved run</option>${options.map(g=>`<option value="${esc(g.id)}" ${comparisonId===g.id?'selected':''}>${esc(g.label||g.id.slice(0,8))}</option>`).join('')}</select></label>`;
     if(!comparison)return `<section><h4>Compare saved experiments</h4>${selector}</section>`;
-    const signature=c=>JSON.stringify([c.scenario,c.provider,c.model,c.tool,c.feature]);
+    const signature=c=>JSON.stringify([c.scenario,c.provider,c.model,c.tool,c.feature,c.concurrency??null]);
     const settings=run=>Object.fromEntries(Object.entries(run.design||{}).filter(([key])=>key!=='label'));
     const differences=result.lane!==comparison.lane||JSON.stringify(ordered(settings(result)))!==JSON.stringify(ordered(settings(comparison)));
     const rows=cells.map(cell=>{
@@ -151,8 +219,8 @@ let savedDesigns=[];
   }
   function renderResults(panel){
     if(!result){panel.innerHTML='<h3>Experiment is running</h3><p>Follow cell progress below. Drafts and jobs survive reloads; cancellation keeps available evidence.</p>';return;}
-    const keys=['scenario','provider','model','tool','feature'];
-    const displayed=result.cells.filter(c=>keys.every(k=>!filters[k]||c[k]===filters[k]));
+    const keys=['scenario','provider','model','tool','feature',...(result.cells.some(c=>c.concurrency)?['concurrency']:[])];
+    const displayed=result.cells.filter(c=>keys.every(k=>!filters[k]||String(c[k])===filters[k]));
     const rows=displayed.map(c=>{
       const attempts=c.evidence?.attempts||[];
       const mean=(arm,key)=>{const samples=attempts.filter(a=>a.arm===arm&&Number.isFinite(a[key])).map(a=>a[key]);return samples.length?samples.reduce((a,b)=>a+b,0)/samples.length:null;};
@@ -164,8 +232,8 @@ let savedDesigns=[];
     const n=value=>Number.isFinite(value)?value.toFixed(1):'—';
     const interval=values=>Array.isArray(values)&&values.length===2?values.map(x=>n(x*100)+'%').join(' to '):'Insufficient evidence';
     const maximum=Math.max(1,...rows.flatMap(r=>[r.baseline||0,r.candidate||0]));
-    panel.innerHTML=`<p class="studio-eyebrow">04 / EXPLORE</p><h3>Experiment results</h3><h4>${esc(result.experiment_id)}</h4><div class="studio-result-summary"><strong>Qualification: ${esc(qualification?.status||'inconclusive')}</strong><span>${result.cells.filter(c=>c.state==='completed').length} / ${result.cells.length} cells completed</span><span>${esc(result.lane)}</span></div>${result.lane==='simulator'?'<p class="studio-note">At least one selected build is a simulator. These observations do not establish live provider performance.</p>':''}<div class="measured-filters">${keys.map(key=>`<label>${esc(key)}<select data-m-filter="${key}"><option value="">All</option>${[...new Set(result.cells.map(c=>c[key]))].map(v=>`<option ${filters[key]===v?'selected':''}>${esc(v)}</option>`).join('')}</select></label>`).join('')}</div><div class="studio-chart" role="img" aria-label="Measured baseline and candidate input tokens">${rows.map(r=>`<div class="studio-chart-row"><strong>${esc(r.scenario)} · ${esc(r.provider)} / ${esc(r.model)} · ${esc(r.feature)} · ${esc(r.tool)}</strong><div class="studio-bar-line"><svg viewBox="0 0 510 12" aria-hidden="true"><rect class="studio-bar-baseline" width="${(r.baseline||0)/maximum*510}" height="12"/></svg><span>${n(r.baseline)}</span></div><div class="studio-bar-line"><svg viewBox="0 0 510 12" aria-hidden="true"><rect class="studio-bar-candidate" width="${(r.candidate||0)/maximum*510}" height="12"/></svg><span>${n(r.candidate)}</span></div></div>`).join('')}</div><div class="studio-table"><table aria-label="Experiment cell metrics"><thead><tr><th>Select for retry</th><th>Scenario / provider / model</th><th>Tool / feature</th><th>Baseline tokens</th><th>Candidate tokens</th><th>Savings</th><th>Baseline ms</th><th>Candidate ms</th><th>State</th></tr></thead><tbody>${rows.map(r=>`<tr><td><input type="checkbox" data-m-retry-cell="${esc(r.id)}" aria-label="Select ${esc(r.scenario)} ${esc(r.provider)} ${esc(r.model)} ${esc(r.feature)} for retry" ${retryCells.has(r.id)?'checked':''}></td><th>${esc(r.scenario)} / ${esc(r.provider)} / ${esc(r.model)}</th><td>${esc(r.tool)} / ${esc(r.feature)}</td><td>${n(r.baseline)}</td><td>${n(r.candidate)}</td><td>${n(r.savings)}%</td><td>${n(r.baselineMs)}</td><td>${n(r.candidateMs)}</td><td>${esc(r.state)} · ${esc(r.decision?.status||'inconclusive')}</td></tr>`).join('')}</tbody></table></div>${rows.map(r=>`<details><summary>Samples, uncertainty and evidence</summary><p>${esc(r.scenario)} · ${esc(r.provider)} / ${esc(r.model)} · ${esc(r.tool)} · ${esc(r.feature)}</p><p>${esc(r.stats.pairs||0)} pairs · token savings 95% interval: ${esc(interval(r.stats.savings_interval))}</p>${r.error?`<p>${esc(r.error)}</p>`:''}<p>${esc(r.evidence?.decision?.reason||'')}</p>${r.evidence?.identity_verification?.mismatches?.length?`<p>Identity checks need attention: ${esc(r.evidence.identity_verification.mismatches.join(', '))}</p>`:''}<div class="studio-table"><table aria-label="Paired request samples"><thead><tr><th>Pair</th><th>Arm</th><th>Tokens</th><th>Latency ms</th><th>Success</th></tr></thead><tbody>${r.attempts.map(a=>`<tr><td>${esc(a.pair_id)}</td><td>${esc(a.arm)}</td><td>${n(a.tokens)}</td><td>${n(a.latency_ms)}</td><td>${esc(a.success)}</td></tr>`).join('')}</tbody></table></div><p>Manifest <code>${esc(r.manifest_digest||'Unavailable')}</code></p><p>Evidence <code>${esc(r.evidence_sha256||'Unavailable')}</code></p></details>`).join('')}${recoveryActions()}<div class="studio-actions"><button type="button" data-m-export>Export experiment evidence</button><button type="button" data-m-duplicate>Edit experiment copy</button></div>`;
-    panel.insertAdjacentHTML('beforeend',distributions(displayed)+comparisonView(displayed));
+    panel.innerHTML=`<p class="studio-eyebrow">04 / EXPLORE</p><h3>Experiment results</h3><h4>${esc(result.experiment_id)}</h4><div class="studio-result-summary"><strong>Qualification: ${esc(qualification?.status||'inconclusive')}</strong><span>${result.cells.filter(c=>c.state==='completed').length} / ${result.cells.length} cells completed</span><span>${esc(result.lane)}</span></div>${result.lane==='simulator'?'<p class="studio-note">At least one selected build is a simulator. These observations do not establish live provider performance.</p>':''}<div class="measured-filters">${keys.map(key=>`<label>${esc(key)}<select data-m-filter="${key}"><option value="">All</option>${[...new Set(result.cells.map(c=>c[key]))].map(v=>`<option ${filters[key]===String(v)?'selected':''}>${esc(v)}</option>`).join('')}</select></label>`).join('')}</div><div class="studio-chart" role="img" aria-label="Measured baseline and candidate input tokens">${rows.map(r=>`<div class="studio-chart-row"><strong>${esc(r.scenario)}${loadCaption(r)} · ${esc(r.provider)} / ${esc(r.model)} · ${esc(r.feature)} · ${esc(r.tool)}</strong><div class="studio-bar-line"><svg viewBox="0 0 510 12" aria-hidden="true"><rect class="studio-bar-baseline" width="${(r.baseline||0)/maximum*510}" height="12"/></svg><span>${n(r.baseline)}</span></div><div class="studio-bar-line"><svg viewBox="0 0 510 12" aria-hidden="true"><rect class="studio-bar-candidate" width="${(r.candidate||0)/maximum*510}" height="12"/></svg><span>${n(r.candidate)}</span></div></div>`).join('')}</div><div class="studio-table"><table aria-label="Experiment cell metrics"><thead><tr><th>Select for retry</th><th>Scenario / provider / model</th><th>Tool / feature</th><th>Baseline tokens</th><th>Candidate tokens</th><th>Savings</th><th>Baseline ms</th><th>Candidate ms</th><th>State</th></tr></thead><tbody>${rows.map(r=>`<tr><td><input type="checkbox" data-m-retry-cell="${esc(r.id)}" aria-label="Select ${esc(r.scenario)}${loadCaption(r)} ${esc(r.provider)} ${esc(r.model)} ${esc(r.feature)} for retry" ${retryCells.has(r.id)?'checked':''}></td><th>${esc(r.scenario)}${loadCaption(r)} / ${esc(r.provider)} / ${esc(r.model)}</th><td>${esc(r.tool)} / ${esc(r.feature)}</td><td>${n(r.baseline)}</td><td>${n(r.candidate)}</td><td>${n(r.savings)}%</td><td>${n(r.baselineMs)}</td><td>${n(r.candidateMs)}</td><td>${esc(r.state)} · ${esc(r.decision?.status||'inconclusive')}</td></tr>`).join('')}</tbody></table></div>${rows.map(r=>`<details><summary>Samples, uncertainty and evidence</summary><p>${esc(r.scenario)}${loadCaption(r)} · ${esc(r.provider)} / ${esc(r.model)} · ${esc(r.tool)} · ${esc(r.feature)}</p><p>${esc(r.stats.pairs||0)} pairs · token savings 95% interval: ${esc(interval(r.stats.savings_interval))}</p>${r.error?`<p>${esc(r.error)}</p>`:''}<p>${esc(r.evidence?.decision?.reason||'')}</p>${r.evidence?.identity_verification?.mismatches?.length?`<p>Identity checks need attention: ${esc(r.evidence.identity_verification.mismatches.join(', '))}</p>`:''}<div class="studio-table"><table aria-label="Paired request samples"><thead><tr><th>Pair</th><th>Arm</th><th>Tokens</th><th>Latency ms</th><th>Success</th></tr></thead><tbody>${r.attempts.map(a=>`<tr><td>${esc(a.pair_id)}</td><td>${esc(a.arm)}</td><td>${n(a.tokens)}</td><td>${n(a.latency_ms)}</td><td>${esc(a.success)}</td></tr>`).join('')}</tbody></table></div><p>Manifest <code>${esc(r.manifest_digest||'Unavailable')}</code></p><p>Evidence <code>${esc(r.evidence_sha256||'Unavailable')}</code></p></details>`).join('')}${recoveryActions()}<div class="studio-actions"><button type="button" data-m-export>Export experiment evidence</button><button type="button" data-m-duplicate>Edit experiment copy</button></div>`;
+    panel.insertAdjacentHTML('beforeend',taskOutcomes(displayed)+loadResults(displayed)+distributions(displayed)+comparisonView(displayed));
   }
   async function showGroup(id){
     comparison=null;comparisonId='';++comparisonVersion;
@@ -205,6 +273,7 @@ let savedDesigns=[];
       return;
     }
     if(event.target.dataset.mChoice==='tools'){capture();const chosen=event.target.value;render();root.querySelector(`[data-m-choice="tools"][value="${chosen}"]`)?.focus({preventScroll:true});return;}
+    if(event.target.dataset.mChoice==='features'){capture();const chosen=event.target.value;render();root.querySelector(`[data-m-choice="features"][value="${chosen}"]`)?.focus({preventScroll:true});return;}
     if(event.target.dataset.mFilter){filters[event.target.dataset.mFilter]=event.target.value;render();return;}
     if(event.target.hasAttribute('data-source-mode')||event.target.dataset.mSetting==='transport'){const before=design.baseline.kind;capture();if(event.target.dataset.sourceMode==='baseline'){design.baseline_optimization=design.baseline.kind!=='passthrough';if(before==='passthrough'||design.baseline.kind==='passthrough')design.candidate_optimization=true;}render();}
     if(event.target.hasAttribute('data-target-provider')){capture();const i=Number(event.target.dataset.targetProvider);design.targets[i].model='';delete design.targets[i].request_model;render();}
@@ -232,8 +301,14 @@ let savedDesigns=[];
         savedDesigns=data.designs;render();status('Saved design removed from your library.');
       }
       else if(button.hasAttribute('data-m-next')||button.hasAttribute('data-m-back')||button.dataset.mStep){
-        capture();await request('/api/benchmarks/measured/preview',design);await request('/api/benchmarks/measured/draft',design);draft=structuredClone(design);
+        capture();
+        if(button.hasAttribute('data-m-back')||Number(button.dataset.mStep)>0&&Number(button.dataset.mStep)<step){
+          step=button.dataset.mStep?Number(button.dataset.mStep):step-1;render();return;
+        }
+        if((button.hasAttribute('data-m-next')||Number(button.dataset.mStep)>step)&&!validateFields())return;
+        await request('/api/benchmarks/measured/preview',design);await request('/api/benchmarks/measured/draft',design);draft=structuredClone(design);
         const next=button.dataset.mStep?Number(button.dataset.mStep):step+(button.hasAttribute('data-m-next')?1:-1);
+        if(step===1&&next>=2)sourceCapabilities=await request('/api/benchmarks/measured/capabilities',{candidate:design.candidate});
         if(next===3)report=await request('/api/benchmarks/measured/preflight',design);
         step=next;render();root.querySelector('[data-measured-step]').focus();status('');
       }

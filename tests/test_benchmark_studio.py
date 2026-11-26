@@ -59,6 +59,17 @@ def test_design_library_rejects_oversized_save_and_keeps_existing_library_remova
     assert studio.measured_library({'action':'remove','id':saved['id']})['designs']==[]
 
 
+def test_saved_design_identity_survives_new_optional_defaults(tmp_path):
+    from agentops.benchmark_studio import Studio
+    from agentops.benchmark_service import BenchmarkService
+    from agentops.benchmark_experiments import catalogue as measured_catalogue
+    studio=Studio(BenchmarkService(tmp_path/'ledger.sqlite'))
+    design=measured_catalogue()['templates'][0]['design'];design.pop('load_concurrency')
+    records=[{'id':digest(design),'design':design,'created_at':'legacy'}]
+    (studio.service.root/'measured-designs.json').write_text(json.dumps(records))
+    assert studio.measured_state()['designs']==records
+
+
 def test_catalogue_is_ready_to_run_and_detached():
     data = catalogue()
     assert len(data['templates']) >= 3

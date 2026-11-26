@@ -437,6 +437,9 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                 elif self.path == '/api/benchmarks/measured/preflight':
                     from .benchmark_experiments import preflight
                     result = preflight(payload, benchmarks())
+                elif self.path == '/api/benchmarks/measured/capabilities':
+                    from .benchmark_experiments import capabilities
+                    result = capabilities(payload, benchmarks())
                 elif self.path == '/api/benchmarks/measured/models':
                     if not isinstance(payload, dict) or set(payload) != {'provider'}:
                         raise ValueError('Choose a provider for model discovery')

@@ -59,11 +59,15 @@ def load_config(path):
         "benchmark_tool",
         "tool_python",
         "provider_binding",
+        "load_concurrency",
     }
     if not isinstance(data, dict) or set(data) - allowed:
         raise ValueError("unknown runner configuration fields")
     if data.get("benchmark_tool", "native") not in {"native", "inspect", "aiperf"}:
         raise ValueError("unsupported benchmark tool")
+    if 'load_concurrency' in data and (data.get('benchmark_tool')!='aiperf'
+            or type(data['load_concurrency']) is not int or not 1<=data['load_concurrency']<=64):
+        raise ValueError('Load execution requires AIPerf and concurrency between 1 and 64')
     if "provider_binding" in data and data["provider_binding"] not in {"openai","anthropic","azure","bedrock"}:
         raise ValueError("unsupported explicit provider binding")
     if "tool_python" in data and (not isinstance(data["tool_python"], str) or not data["tool_python"].strip()
@@ -129,6 +133,9 @@ def run_local(args):
         setup_error = None
         try:
             adapter = LocalAdapter(experiment, args.artifact, config, workspace)
+            if config.get('load_concurrency'):
+                from .load_adapter import LoadAdapter
+                adapter=LoadAdapter(adapter,concurrency=config['load_concurrency'])
         except KeyboardInterrupt:
             adapter = SetupFailure(KeyboardInterrupt())
             setup_error = "cancelled"
@@ -136,6 +143,8 @@ def run_local(args):
             adapter = SetupFailure(exc)
             setup_error = type(exc).__name__
         result = run_experiment(experiment, adapter)
+        if config.get('load_concurrency'):
+            result['load_batches']=getattr(adapter,'batches',[])
         result["runner_config_digest"] = digest(
             {
                 key: value

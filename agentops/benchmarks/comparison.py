@@ -139,6 +139,8 @@ def run_local_comparison(args):
     configs = {'candidate': candidate_config,
                'baseline': load_config(args.baseline_config) if getattr(args, 'baseline_config', None)
                else copy.deepcopy(candidate_config)}
+    if any(config.get('load_concurrency') for config in configs.values()):
+        raise ValueError('Concurrent load execution currently requires a same-build passthrough baseline')
     artifacts = {'baseline': args.baseline_artifact, 'candidate': args.artifact}
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)

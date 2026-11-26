@@ -2,8 +2,9 @@ const {test,expect}=require('@playwright/test');
 
 test('saved experiments show sample distributions and descriptive cross-run changes',async({page})=>{
   const ids=['a'.repeat(32),'b'.repeat(32)];
-  const cell=(tokens)=>({id:'cell',state:'completed',scenario:'smoke',provider:'openai',model:'pinned',tool:'native',feature:'default',
-    decision:{status:'inconclusive'},evidence:{schema_version:2,attempts:['baseline','candidate'].flatMap(arm=>
+  const cell=(tokens)=>({id:'cell',state:'completed',scenario:'smoke',provider:'openai',model:'pinned',tool:'native',feature:'default',concurrency:2,
+    decision:{status:'inconclusive'},evidence:{schema_version:2,load_batches:['a1_passthrough','b_headroom'].map(arm=>({arm,
+      concurrency:2,completed_requests:5,elapsed_seconds:1,requests_per_second:5,prompt_tokens:500})),attempts:['baseline','candidate'].flatMap(arm=>
       [0,1,2,3,4].map(i=>({arm,pair_id:String(i),tokens:arm==='baseline'?100:tokens+i,latency_ms:10+i,success:true})))}});
   await page.route('**/api/benchmarks/measured**',async route=>{
     const group=new URL(route.request().url()).searchParams.get('group');
@@ -19,6 +20,10 @@ test('saved experiments show sample distributions and descriptive cross-run chan
   await root.getByRole('button',{name:'Explore experiment aaaaaaaa',exact:true}).click();
   await expect(root.getByRole('img',{name:'Input token sample distribution: smoke'})).toBeVisible();
   await expect(root.getByRole('table',{name:'Sample distribution summary'})).toContainText('72.0');
+  await expect(root.getByRole('table',{name:'Task outcome summary'})).toContainText('100.0%');
+  await expect(root.getByRole('table',{name:'Measured load throughput'})).toContainText('5.0');
+  await root.locator('[data-m-filter="concurrency"]').selectOption('2');
+  await expect(root.locator('[data-m-filter="concurrency"]')).toHaveValue('2');
   await root.getByLabel('Compare with saved experiment',{exact:true}).selectOption(ids[1]);
   const comparison=root.getByRole('table',{name:'Saved experiment comparison'});
   await expect(comparison).toContainText('-10.0');
@@ -58,9 +63,34 @@ test('named design library survives reload without submitting an experiment',asy
   expect(launches).toBe(0);
 });
 
+test('load template previews every concurrency level and its full request budget',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:'Benchmarking',exact:true}).click();
+  const root=page.getByRole('region',{name:'Measured experiment designer',exact:true});
+  await root.getByRole('button',{name:'Use Latency and throughput sweep',exact:true}).click();
+  await root.getByRole('combobox',{name:'Prepared candidate wheel',exact:true}).selectOption('f'.repeat(32));
+  await root.getByRole('button',{name:'Next',exact:true}).click();
+  await expect(root.getByLabel('Load concurrency levels',{exact:true})).toHaveValue('1, 2, 4');
+  await root.getByLabel('Model ID 1',{exact:true}).fill('pinned-model');
+  await root.getByRole('button',{name:'Next',exact:true}).click();
+  await expect(root.getByText('3 cells · 120 provider requests',{exact:true})).toBeVisible();
+  await expect(root.locator('.studio-matrix')).toContainText('4 concurrent');
+});
+
+test('wizard keeps invalid settings beside the field and focuses the first correction',async({page})=>{
+  const root=await start(page);
+  const model=root.getByLabel('Model ID 1',{exact:true});await model.fill('');
+  await root.getByRole('button',{name:'Next',exact:true}).click();
+  await expect(model).toBeFocused();await expect(model).toHaveAttribute('aria-invalid','true');
+  await expect(root.getByRole('alert')).toHaveText('Enter the pinned model identifier.');
+  await model.fill('pinned-model');await root.getByRole('button',{name:'Next',exact:true}).click();
+  await expect(root.getByRole('heading',{name:'Review every planned cell',exact:true})).toBeVisible();
+});
+
 test('measured wizard previews every cell, preflights fixture and restores its draft',async({page})=>{
   const root=await start(page);
   await root.getByLabel('Repeated context',{exact:true}).check();
+  await root.getByText('Preview Protocol smoke test tasks',{exact:true}).click();
+  await expect(root.getByText('Expected answer: 42',{exact:true}).first()).toBeVisible();
   await root.getByRole('button',{name:'Next',exact:true}).click();
   await expect(root.getByText('2 cells · 20 provider requests',{exact:true})).toBeVisible();
   await expect(root.getByText('Offline fixture · no provider charges',{exact:true})).toBeVisible();

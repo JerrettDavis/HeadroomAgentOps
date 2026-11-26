@@ -46,7 +46,7 @@ def catalogue():
     base={'template':'measured-regression','label':'Candidate regression',
           'candidate':{'kind':'prepared','job_id':''},'baseline':{'kind':'passthrough'},
           'targets':[{'provider':'openai','model':''}], 'tools':['native'],
-          'scenarios':['smoke'],'features':['default'],'repeats':5,'seed':42,
+        'scenarios':['smoke'],'features':['default'],'repeats':5,'seed':42,'load_concurrency':[],
           'baseline_optimization':True,'candidate_optimization':True,
           'runner':{'transport':'local','config_path':'','env':[]},'policy':dict(POLICY)}
     templates=[]
@@ -59,11 +59,13 @@ def catalogue():
          {'scenarios':['smoke','long-context','code'],'policy':dict(POLICY,maximum_accuracy_regression=0,minimum_accuracy=1)}),
         ('measured-providers','Provider and model comparison','Run the same paired tasks on independently configured provider/model targets.',
          {'targets':[{'provider':'openai','model':''},{'provider':'anthropic','model':''}]}),
+        ('measured-load','Latency and throughput sweep','Measure bounded concurrent AIPerf requests at several load levels on each native optimization arm.',
+         {'tools':['aiperf'],'repeats':20,'load_concurrency':[1,2,4]}),
     ]:
         templates.append({'id':identifier,'name':name,'description':description,'version':1,
                           'design':dict(base,**changes,template=identifier)})
     return copy.deepcopy({'version':1,'templates':templates,'providers':PROVIDERS,
-                          'scenarios':[{k:v for k,v in s.items() if k!='tasks'} for s in SCENARIOS],
+        'scenarios':[{**{k:v for k,v in s.items() if k!='tasks'},'preview':copy.deepcopy(s['tasks'])} for s in SCENARIOS],
                           'features':FEATURES,'tools':TOOLS,'limits':{'cells':24,'requests':1200}})
 
 
@@ -126,6 +128,13 @@ def validate(payload):
     data['targets']=targets
     if type(data['repeats']) is not int or not 5<=data['repeats']<=100 or type(data['seed']) is not int or not 0<=data['seed']<=2**32-1:
         raise ValueError('Use 5–100 repeats and an integer seed between 0 and 4294967295')
+    levels=data['load_concurrency']
+    if (not isinstance(levels,list) or len(levels)>8 or any(type(v) is not int or not 1<=v<=min(64,data['repeats']) for v in levels)
+            or len(set(levels))!=len(levels)):
+        raise ValueError('Choose up to eight unique load concurrency levels between 1 and the request count (maximum 64)')
+    if levels and (data['tools']!=['aiperf'] or data['baseline']['kind']!='passthrough'
+            or any(t['provider'] not in {'openai','azure'} for t in targets)):
+        raise ValueError('Load sweeps require AIPerf, OpenAI/Azure targets and a same-build passthrough baseline')
     runner=data['runner']
     allowed={'transport','config_path','env','image','host','ssh_port','ssh_config','cpus','memory_gib'}
     if not isinstance(runner,dict) or set(runner)-allowed or runner.get('transport') not in {'local','docker','ssh'}:
@@ -146,8 +155,9 @@ def validate(payload):
     runner['env']=sorted(set(names))
     # Use the same statistical validation as the native evaluator.
     evaluate([],data['policy'],5)
-    cells=len(data['targets'])*len(data['tools'])*len(data['scenarios'])*len(data['features'])
-    if cells>24 or cells*data['repeats']*2>1200:
+    cells=len(data['targets'])*len(data['tools'])*len(data['scenarios'])*len(data['features'])*max(1,len(levels))
+    requests=sum(len(s['tasks']) for s in SCENARIOS if s['id'] in data['scenarios'])*len(data['targets'])*len(data['tools'])*len(data['features'])*max(1,len(levels))*data['repeats']*2
+    if cells>24 or requests>1200:
         raise ValueError('Experiment exceeds the 24-cell or 1200-request limit')
     return data
 
@@ -159,15 +169,19 @@ def preview(payload):
         for scenario in design['scenarios']:
             for feature in design['features']:
                 for target in design['targets']:
-                    axes={'tool':tool,'scenario':scenario,'feature':feature,**target}
-                    cells.append(dict(axes,id=digest(axes).split(':')[1][:24]))
-    return {'design':design,'cells':cells,'requests':len(cells)*design['repeats']*2,
+                    for level in design['load_concurrency'] or [None]:
+                        axes={'tool':tool,'scenario':scenario,'feature':feature,**target}
+                        if level is not None:axes['concurrency']=level
+                        cells.append(dict(axes,id=digest(axes).split(':')[1][:24]))
+    task_counts={s['id']:len(s['tasks']) for s in SCENARIOS}
+    return {'design':design,'cells':cells,'requests':sum(task_counts[c['scenario']] for c in cells)*design['repeats']*2,
             'charges':True,'notice':'Measured runs may send requests to the selected providers and incur usage charges.'}
 
 
 def inspect_wheel(path):
     """Read declared CLI feature capabilities without importing candidate code."""
     flags=set()
+    declarations={}
     simulator=False
     with zipfile.ZipFile(path) as archive:
         for item in archive.infolist():
@@ -180,10 +194,21 @@ def inspect_wheel(path):
                         if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='add_argument':
                             action=next((kw.value.value for kw in node.keywords if kw.arg=='action' and isinstance(kw.value,ast.Constant)),None)
                             if action=='store_true':
-                                flags.update(a.value for a in node.args if isinstance(a,ast.Constant) and isinstance(a.value,str))
+                                names=[a.value for a in node.args if isinstance(a,ast.Constant) and isinstance(a.value,str)]
+                                flags.update(names)
+                                help_text=next((kw.value.value for kw in node.keywords if kw.arg=='help' and isinstance(kw.value,ast.Constant) and isinstance(kw.value.value,str)),'')
+                                default_node=next((kw.value for kw in node.keywords if kw.arg=='default'),None)
+                                default={} if default_node is not None else {'default':False}
+                                if isinstance(default_node,ast.Constant) and type(default_node.value) is bool:
+                                    default={'default':default_node.value}
+                                for name in names:
+                                    declarations[name]={'type':'boolean','enum':[False,True],**default,
+                                        'cli_argument':name,'title':name.lstrip('-').replace('-',' ').capitalize(),'description':help_text}
                 except (SyntaxError,UnicodeError):
                     pass
-    return {'features':[f['id'] for f in FEATURES if not f['args'] or set(f['args'])<=flags],
+    supported=[f for f in FEATURES if not f['args'] or set(f['args'])<=flags]
+    return {'features':[f['id'] for f in supported],
+            'feature_schema':[{**copy.deepcopy(f),'configuration_schema':declarations.get(f['args'][0]) if f['args'] else None} for f in supported],
             'simulator':simulator,'sha256':'sha256:'+hashlib.sha256(Path(path).read_bytes()).hexdigest()}
 
 
@@ -206,7 +231,16 @@ def resolve_source(source,service):
         raise ValueError('Candidate wheel unavailable or exceeds supported limits')
     observed=inspect_wheel(path)
     return {'artifact':str(path),'sha':sha,'artifact_sha256':observed['sha256'],
-            'features':observed['features'],'simulator':observed['simulator'],'provenance':provenance}
+            'features':observed['features'],'feature_schema':observed.get('feature_schema',[]),
+            'simulator':observed['simulator'],'provenance':provenance}
+
+
+def capabilities(payload,service):
+    if not isinstance(payload,dict) or set(payload)!={'candidate'}:
+        raise ValueError('Choose one candidate source for configuration discovery')
+    source=resolve_source(_source(payload['candidate']),service)
+    return {'sha':source['sha'],'artifact_sha256':source['artifact_sha256'],
+            'features':source['feature_schema'],'supported_features':source['features']}
 
 
 def preflight(payload,service):

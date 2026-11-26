@@ -62,3 +62,6 @@
 .measured-dot-baseline { fill: #75869b; }
 .measured-dot-candidate { fill: #138bba; }
 .measured-distributions { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 20px; }
+.measured-task-previews pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; padding: 12px; border: 1px solid var(--line); }
+.measured-field-error { font-weight: 600; border-left: 3px solid currentColor; padding-left: 8px; }
+.measured-studio [aria-invalid="true"] { outline: 2px solid currentColor; outline-offset: 2px; }

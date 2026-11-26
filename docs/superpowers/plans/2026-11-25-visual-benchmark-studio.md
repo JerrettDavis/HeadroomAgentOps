@@ -51,10 +51,10 @@ Files: `agentops/benchmark_sources.py`, Studio API/UI and `tests/test_benchmark_
 
 Files: `agentops/benchmark_tools.py`, native two-build runner contract, Studio API/UI, relevant benchmark and browser tests.
 
-- [ ] Write and run failing tests for native two-build execution, Inspect/AIPerf execution adapters, feature compatibility, matrix cell completeness and tool-specific metrics.
-- [ ] Implement configured provider/model capabilities, schema-derived feature settings, measured templates, runner preflight, bounded matrix orchestration and evidence readers.
-- [ ] Add distributions, uncertainty, scenario filtering, comparisons, retries, duplication and exports with accessible tables.
-- [ ] Run full Python/UI regressions, review the branch independently, and audit every spec requirement against source/runtime evidence. Record unavailable live prerequisites explicitly; do not mark the overall goal complete without required proof.
+- [x] Write and run failing tests for native two-build execution, Inspect/AIPerf execution adapters, feature compatibility, matrix cell completeness and tool-specific metrics.
+- [x] Implement configured provider/model capabilities, schema-derived feature settings, measured templates, runner preflight, bounded matrix orchestration and evidence readers.
+- [x] Add distributions, uncertainty, scenario filtering, comparisons, retries, duplication and exports with accessible tables.
+- [x] Run full Python/UI regressions, review the branch independently, and audit every spec requirement against source/runtime evidence. Record unavailable live prerequisites explicitly; do not mark the overall goal complete without required proof.
 
 ## Progress
 
@@ -102,3 +102,11 @@ Design approved. Baseline and task 1 implementation next. All five tasks are req
 - Verification: 34 focused backend tests passed, full browser suite 53 passed, then two focused catalogue/library browser checks passed. Independent review found projected-size omission; reproduced red/green and fixed, then reviewer independently cleared three library checks.
 - Immutable runtime59347f4 relaunch verified: all46capturedqueued rows and six configs unchanged, original watches restored, exact assets, unauthenticated mutation403 and actual browser offline demo completed. Audit receipt .agentops/runtime-reload-59347f4-verification.json.
 - Remaining work: integrate/verify genuine bounded throughput sweep, final full regression and spec audit. Remote SSH behavior has unit/receipt tests but no live configured SSH prerequisite; do not claim it live-tested.
+
+2026-11-26 final throughput and reproducibility checkpoint:
+- Genuine bounded AIPerf load batches, native per-request identity checks and measured throughput are integrated into the matrix and results. Concurrency expands cells and every task/request counts toward24cells/1200requests. Failed batches are reserved before invocation and never implicitly replayed. Supported lane: OpenAI/Azure nonstreaming single-user text, same-build baseline, concurrency1–64 bounded by requests. Unsupported two-build load is explicitly rejected.
+- Independent audit found late-bound task/feature catalogues. Added exact frozen tasksets/revisions/digests, selected-wheel declared feature settings and policy digests; execution consumes pinned data, legacy unpinned execution/retry fails closed. Terminal cells include strict native manifests for reproducible exports. Mutation regression, affected native single/two-build/SDK/load/recovery tests and independent review cleared.
+- Added actual task prompt/expected-answer previews, adjacent accessible validation with focus and backward navigation, selected-wheel safe boolean configuration schemas/help/defaults without code execution, and visible task success/threshold tables. Unknown declarations are unavailable rather than invented; advanced explicit runner configuration remains supported.
+- Verification: full optional-harness Python regression704passed,16skipped,71subtests (530.14s); full browser regression55passed. After audit fixes, affected real-group/tools/recovery/Studio set49passed (357.16s), focused backend44passed, task-count budget regression23passed. Actual exported group root/native-manifest/taskset digests independently verified. Direct genuine AIPerf load12tests passed, including concurrency2/4 exactrequestcounts and cancellation cleanup.
+- Actual Docker measured fixture group produced10pairedobservations, verifiedidentities/hashes, no replay on reopen, bothownedcontainersremoved. Receipt .agentops/verification/docker-measured-59347f4-20261126T085241Z/docker-measured-audit.json. No billedprovidercalls; no liveSSHhost available. Acceptance evidence: docs/superpowers/plans/2026-11-26-benchmark-studio-acceptance.md.
+- Library runtimead46c56 verified live with49queuedrows/eightsavedconfigurations preserved, watches/authunchanged, exactassets and actualbrowserdemo. Final checkpoint relaunch follows this commit; record its receipt before goal completion.

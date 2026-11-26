@@ -25,6 +25,20 @@ def test_prepared_source_preserves_repository_in_exported_provenance(tmp_path,mo
     assert resolved['provenance']=={'strategy':'artifact','repository':'owner/repo','source_job_id':'source-job'}
 
 
+def test_configuration_schema_is_read_from_selected_wheel_without_executing_it(tmp_path):
+    from zipfile import ZipFile
+    from types import SimpleNamespace
+    from agentops.benchmark_experiments import capabilities
+    wheel=tmp_path/'candidate.whl'
+    with ZipFile(wheel,'w') as archive:
+        archive.writestr('headroom/proxy/server.py',"raise RuntimeError('must never execute')\nparser.add_argument('--no-cache',action='store_true',default=True,help='Selected version cache control')\nparser.add_argument('--compress-user-messages',action='store_false')\n")
+    result=capabilities({'candidate':{'kind':'local','artifact':str(wheel),'sha':'a'*40}},SimpleNamespace(root=tmp_path))
+    assert result['supported_features']==['default','no-cache']
+    schema=next(f for f in result['features'] if f['id']=='no-cache')['configuration_schema']
+    assert schema=={'type':'boolean','enum':[False,True],'default':True,'cli_argument':'--no-cache',
+                    'title':'No cache','description':'Selected version cache control'}
+
+
 def test_measured_templates_expand_explicit_matrix_without_external_requests():
     data=design()
     data['scenarios']=['smoke','long-context']
@@ -53,6 +67,34 @@ def test_matrix_and_request_limits_account_for_every_scenario_target_and_feature
     data['targets']=[{'provider':'openai','model':f'pinned-{i}'} for i in range(10)]
     data['scenarios']=['smoke','long-context','code']
     with pytest.raises(ValueError,match='24'):
+        preview(data)
+
+
+def test_load_sweep_expands_concurrency_and_counts_all_upstream_requests():
+    template=next(t for t in catalogue()['templates'] if t['id']=='measured-load')
+    result=preview(template['design'])
+    assert [cell['concurrency'] for cell in result['cells']]==[1,2,4]
+    assert result['requests']==120
+    assert len({cell['id'] for cell in result['cells']})==3
+    with pytest.raises(ValueError,match='1200'):
+        preview(dict(template['design'],repeats=100,load_concurrency=list(range(1,8))))
+    for change in ({'tools':['native']},{'baseline':{'kind':'prepared','job_id':''}},
+                   {'targets':[{'provider':'anthropic','model':'pinned'}]}, {'load_concurrency':[1,1]},
+                   {'load_concurrency':[65]},{'load_concurrency':[True]}):
+        with pytest.raises(ValueError):
+            preview(dict(template['design'],**change))
+
+
+def test_request_budget_counts_every_task_in_a_scenario(tmp_path,monkeypatch):
+    import agentops.benchmark_experiments as module
+    scenarios=copy.deepcopy(module.SCENARIOS)
+    smoke=next(s for s in scenarios if s['id']=='smoke')
+    smoke['tasks'].append(dict(smoke['tasks'][0],id='second-task'))
+    monkeypatch.setattr(module,'SCENARIOS',scenarios)
+    data=design();data['repeats']=100
+    assert preview(data)['requests']==400
+    data['targets']=[{'provider':'openai','model':str(i)} for i in range(4)]
+    with pytest.raises(ValueError,match='1200'):
         preview(data)
 
 

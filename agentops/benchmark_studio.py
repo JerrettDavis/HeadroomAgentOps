@@ -188,7 +188,7 @@ class Studio:
             try:
                 progress=json.loads((self.service.root/job['id']/'group-state.json').read_text('utf-8'))
                 group_state=progress['state']
-                fields={'id','tool','scenario','feature','provider','model','state','decision','error','reused'}
+                fields={'id','tool','scenario','feature','provider','model','concurrency','state','decision','error','reused'}
                 cells=[{k:v for k,v in c.items() if k in fields} for c in progress['cells']]
             except (OSError,KeyError,ValueError,TypeError):
                 try:
@@ -224,7 +224,7 @@ class Studio:
             if not isinstance(record,dict) or set(record)!={'id','design','created_at'}:
                 raise ValueError('Invalid saved experiment design')
             design=validate(record['design'])
-            if record['id']!=digest(design) or record['id'] in seen or not isinstance(record['created_at'],str):
+            if record['id']!=digest(record['design']) or record['id'] in seen or not isinstance(record['created_at'],str):
                 raise ValueError('Saved experiment design identity differs')
             seen.add(record['id'])
         return records
