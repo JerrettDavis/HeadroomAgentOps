@@ -72,6 +72,10 @@ class MaintenanceAgentTests(unittest.TestCase):
                     agent.execute(row, saved.update)
             self.assertEqual(len(saved['attempts']), 1)
             self.assertFalse(list((directory / 'auth').iterdir()))
+            worker.observe = lambda _: {'state': 'exited', 'exit_code': 0}
+            with patch.object(agent, '_start', side_effect=ValueError('new attempt started')):
+                with self.assertRaisesRegex(ValueError, 'new attempt started'):
+                    agent.execute(row, saved.update)
 
     def test_protected_source_changes_require_candidate_bound_provenance(self):
         from agentops.maintenance_agent import protected_source_gate

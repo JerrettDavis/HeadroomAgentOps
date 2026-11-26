@@ -271,7 +271,8 @@ class MaintenanceAgent:
         handle, assignment = row.get('handle'), row.get('assignment')
         if handle and row.get('retry_requested'):
             observed = self.worker.observe(handle)
-            validated = (row.get('validation_receipt') or {}).get('candidate') == (row.get('prepared') or {}).get('new_head')
+            candidate = (row.get('validation_receipt') or {}).get('candidate')
+            validated = bool(candidate) and candidate == (row.get('prepared') or {}).get('new_head')
             if observed['state'] == 'missing' or (observed['state'] == 'exited' and
                     (observed.get('exit_code') != 0 or not validated)):
                 self._clear_auth(handle)

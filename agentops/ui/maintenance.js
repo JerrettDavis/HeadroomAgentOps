@@ -59,10 +59,18 @@
     if (!force && current === signature) return;
     signature = current;
     const scroll = root.scrollTop;
+    const active = document.activeElement;
+    const focus = root.contains(active) ? {tag: active.tagName,
+      label: active.getAttribute('aria-label') || active.textContent} : null;
     root.replaceChildren(el('h1', view === 'updates' ? 'PR updates' : 'Main CI'));
     const status = el('p', message, 'maintenance-status'); status.setAttribute('role', 'status'); root.append(status);
     if (view === 'updates') renderUpdates(); else renderMain();
     root.scrollTop = scroll;
+    if (focus) {
+      const replacement = [...root.querySelectorAll('input,button,a')].find(item => !item.disabled &&
+        item.tagName === focus.tag && (item.getAttribute('aria-label') || item.textContent) === focus.label);
+      replacement?.focus({preventScroll: true});
+    }
   }
   function renderUpdates() {
     root.append(el('p', 'Rebase PRs behind main. Verified mechanical updates reuse existing review evidence silently.'));

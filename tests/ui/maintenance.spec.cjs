@@ -27,6 +27,10 @@ test('bulk update selection retains partial failures and explicit remediation', 
   await page.goto('/');
   await page.getByRole('button', {name: 'PR updates', exact: true}).click();
   await expect(page.getByRole('heading', {name: 'PR updates', exact: true})).toBeVisible();
+  const first = page.getByRole('checkbox', {name: 'Update PR #1'});
+  await expect(first).toBeEnabled();
+  await first.focus(); await page.keyboard.press('Space');
+  await expect(first).toBeFocused(); await expect(first).toBeChecked();
   await page.getByRole('button', {name: 'Select all outdated PRs'}).click();
   await page.getByRole('button', {name: 'Update selected PRs'}).click();
   await expect.poll(() => calls.find(c => c.url.endsWith('/update'))?.body.numbers).toEqual([1,2]);

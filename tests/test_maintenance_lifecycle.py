@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -164,6 +165,20 @@ class MaintenanceLifecycleTests(unittest.TestCase):
             gh = Github()
             worker = worker_type(root / 'workers', 'o/r')
             engine = MaintenanceGit(root / 'publications', 'o/r', remote=str(remote))
+            if worker_type is not DockerFixtureWorker:
+                def validate_fixture(snapshot, commands):
+                    receipts = []
+                    for argv in commands:
+                        parsed = shlex.split(argv[2])
+                        self.assertEqual(parsed[:2], ['python3', '-c'])
+                        environment = {k: v for k, v in os.environ.items()
+                                       if k.upper() in ('PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP')}
+                        checked = subprocess.run([sys.executable, *parsed[1:]], cwd=snapshot,
+                            env=environment, capture_output=True, text=True, timeout=10)
+                        receipts.append({'argv': argv, 'exit_code': checked.returncode})
+                    return {'state': 'passed' if all(r['exit_code'] == 0 for r in receipts) else 'failed',
+                            'commands': receipts, 'image': 'trusted fixture interpreter'}
+                engine.validator = validate_fixture
             agent = MaintenanceAgent(root / 'ledger', {'repo': 'o/r'}, gh, worker=worker, engine=engine)
             record = {'task': 'main', 'main_sha': main, 'head_sha': main, 'failures': []}
             saved = {}
