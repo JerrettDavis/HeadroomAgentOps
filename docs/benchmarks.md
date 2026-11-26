@@ -278,7 +278,20 @@ cached for 60 seconds, and paginated in pages of 20 (up to 20 pages). Artifact
 pages scan repository artifacts and clearly distinguish an empty page from a
 complete search. Discovery does not download or execute code.
 
+Choose **Fetch** on an available artifact to download and verify its single wheel.
+Choose **Build this commit in Docker** to check out the exact commit and build a
+wheel in a container limited to 2 CPUs and 4 GiB memory. The builder image is
+resolved to an immutable image ID, and the source, recipe and wheel digests are
+retained. **Reuse a wheel or build in Docker** checks up to 20 successful build
+runs; ambiguous or incomplete searches require an explicit selection.
+
+Prepared-source jobs show their current stage and survive panel reloads. **Use
+prepared wheel** rechecks its provenance and bytes, then fills candidate
+inspection and the full SHA automatically. Select a runner compatible with the
+wheel's platform tag before inspecting it. Fetching and building do not run
+model requests; inspecting and measuring remain separate explicit actions.
+
 This is the first implementation stage of the approved Studio design. Measured
-candidate runs still use the existing file-based workflow described above. Connecting
-remote artifacts/builds to the designer, measured tool adapters, two-build
-comparisons and grouped execution remain under development.
+candidate runs still use the existing file-based workflow described above. The
+measured tool adapters, two-build comparisons, the measured visual designer and
+grouped execution remain under development.

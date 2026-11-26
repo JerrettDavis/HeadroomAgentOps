@@ -46,6 +46,18 @@ test('template wizard edits a matrix, saves a draft and restores it after reload
 
 test('source selector debounces search, ignores stale responses and selects a pinned SHA by keyboard', async ({page}) => {
   const queries=[];
+  let prepared=false,sourceRequest;
+  await page.route('**/api/benchmarks/studio',async route=>{
+    const response=await route.fetch();const state=await response.json();
+    await route.fulfill({json:{...state,sources:prepared?[{id:'c'.repeat(32),state:'completed'}]:[]}});
+  });
+  await page.route('**/api/benchmarks',async route=>{
+    if(route.request().method()==='POST' && route.request().postDataJSON().action==='source'){
+      sourceRequest=route.request().postDataJSON();prepared=true;
+      await route.fulfill({json:{id:'c'.repeat(32),state:'queued',action:'source'}});
+    }else await route.continue();
+  });
+  await page.route('**/api/benchmarks/studio?source=*',route=>route.fulfill({json:{id:'c'.repeat(32),artifact:'/prepared/candidate.whl',sha:'b'.repeat(40),sha256:'sha256:'+'d'.repeat(64)}}));
   await page.route('**/api/benchmarks/studio/sources',async route=>{
     const data=route.request().postDataJSON();queries.push(data);
     if(data.query==='slow')await new Promise(resolve=>setTimeout(resolve,900));
@@ -66,4 +78,9 @@ test('source selector debounces search, ignores stale responses and selects a pi
   await expect(selected).toContainText('b'.repeat(40));
   await expect(selected).toContainText('candidate-wheel');
   expect(queries[1]).toMatchObject({query:'new query',page:1,kind:'commits'});
+  await selected.getByRole('button',{name:'Fetch candidate-wheel',exact:true}).click();
+  await page.getByRole('button',{name:'Use prepared wheel cccccccc',exact:true}).click();
+  expect(sourceRequest).toMatchObject({action:'source',source:{kind:'artifact',sha:'b'.repeat(40),artifact_id:12}});
+  await expect(page.locator('form[data-action="inspect"] input[name="artifact"]')).toHaveValue('/prepared/candidate.whl');
+  await expect(page.locator('form[data-action="create"] input[name="candidate_sha"]')).toHaveValue('b'.repeat(40));
 });

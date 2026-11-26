@@ -489,8 +489,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
                     try:
                         query = parse_qs(url.query)
                         studio = Studio(benchmarks())
-                        result = studio.result(query['job'][0]) if 'job' in query else studio.state()
-                        if 'job' not in query:
+                        result = studio.result(query['job'][0]) if 'job' in query else studio.source(query['source'][0]) if 'source' in query else studio.state()
+                        if 'job' not in query and 'source' not in query:
                             result['default_repository'] = launcher.config.get('repo', '')
                         body = redact(json.dumps(result, ensure_ascii=False, allow_nan=False)).encode()
                     except (ValueError, KeyError, OSError, TypeError):

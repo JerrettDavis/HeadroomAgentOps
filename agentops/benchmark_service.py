@@ -20,6 +20,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _TERMINAL = {"completed", "failed", "recoverable", "cancelled", "interrupted"}
 _PUBLIC = (
     "id",
+    "label",
     "action",
     "state",
     "created_at",
@@ -31,6 +32,7 @@ _PUBLIC = (
 )
 _THREAD_LOCK = threading.RLock()
 _FIELDS = {
+    "source": {"source"},
     "demo": {"design"},
     "inspect": {
         "artifact",
@@ -276,6 +278,14 @@ class BenchmarkService:
         return matches[0]
 
     def _argv(self, payload, directory):
+        if isinstance(payload, dict) and payload.get("action") == "source":
+            from .benchmark_resolver import validate_source
+            if set(payload) != {"action", "source"}:
+                raise ValueError("Source preparation requires only a source selection")
+            source = validate_source(payload["source"])
+            return (["resolve-source", "--source", json.dumps(source), "--output", str(directory)],
+                    {"source": str(directory / "source.json"), "inspection": None,
+                     "manifest": None, "result": None, "dataset": None})
         if isinstance(payload, dict) and payload.get("action") == "demo":
             from .benchmark_studio import validate_design
             if set(payload) != {"action", "design"}:
@@ -496,6 +506,11 @@ class BenchmarkService:
             "argv": argv,
             "started_epoch": time.time(),
         }
+        if payload["action"] in {"demo", "source"}:
+            settings = json.loads(argv[2])
+            job["label"] = settings["label"] if payload["action"] == "demo" else (
+                f'{settings["repository"]} @ {settings["sha"][:10]} · {settings["kind"]}'
+            )
         _write(directory / "job.json", job)
         try:
             flags = (

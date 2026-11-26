@@ -156,6 +156,9 @@ def parser():
     demonstration = commands.add_parser("demo", help="run an offline Studio simulation without provider calls")
     demonstration.add_argument("--design", required=True)
     demonstration.add_argument("--output", required=True)
+    source = commands.add_parser("resolve-source", help="explicitly fetch a pinned artifact or build a pinned commit in Docker")
+    source.add_argument("--source", required=True)
+    source.add_argument("--output", required=True)
     export = commands.add_parser(
         "export-dataset", help="export private task inputs for an OSS harness"
     )
@@ -255,6 +258,10 @@ def main(argv=None):
             signum = getattr(signal, name)
             previous[signum] = signal.signal(signum, cancel)
     try:
+        if args.command == "resolve-source":
+            from agentops.benchmark_resolver import resolve
+            resolve(load_json_text(args.source), args.output)
+            return 0
         if args.command == "demo":
             from agentops.benchmark_studio import demo
             demo(load_json_text(args.design), args.output)

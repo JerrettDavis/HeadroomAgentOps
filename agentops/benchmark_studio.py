@@ -147,7 +147,19 @@ class Studio:
         if self.draft_path.is_file():
             draft = validate_design(json.loads(self.draft_path.read_text('utf-8')))
         state = self.service.status()
+        from .benchmark_resolver import STAGES
+        sources=[]
+        for job in state['jobs']:
+            if job['action'] != 'source':
+                continue
+            progress = None
+            try:
+                progress = STAGES.get(json.loads((self.service.root / job['id'] / 'source-progress.json').read_text('utf-8')).get('stage'))
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+            sources.append(dict(job, progress=progress))
         return {'catalogue': catalogue(), 'draft': draft, 'active': state['active'],
+                'sources': sources,
                 'jobs': [j for j in state['jobs'] if j['action'] == 'demo']}
 
     def save_draft(self, payload):
@@ -169,3 +181,25 @@ class Studio:
             raise ValueError('Result evidence could not be verified')
         result = json.loads(Path(verified_path).read_text('utf-8'))
         return {'id': identifier, 'result': result, 'sha256': digest(result)}
+
+    def source(self, identifier):
+        from .benchmark_resolver import validate_source
+        job = self.service._prior(identifier, 'source')
+        if job['state'] != 'completed':
+            raise ValueError('Wait for source preparation to complete')
+        directory = self.service.root / identifier
+        record = json.loads((directory / 'source.json').read_text('utf-8'))
+        if digest(record) != (directory / 'source.sha256').read_text('utf-8'):
+            raise ValueError('Source provenance could not be verified')
+        request = validate_source(record['request'])
+        if request != json.loads(job['argv'][2]):
+            raise ValueError('Source request differs from the selected immutable source')
+        wheel = (directory / record['wheel']).resolve()
+        if (not wheel.is_relative_to(directory.resolve()) or not wheel.is_file()
+                or wheel.suffix != '.whl' or wheel.stat().st_size > 256 * 1024 * 1024
+                or 'sha256:' + hashlib.sha256(wheel.read_bytes()).hexdigest() != record['sha256']):
+            raise ValueError('Candidate wheel could not be verified')
+        return {'id': identifier, 'artifact': str(wheel), 'sha': request['sha'],
+                'repository': request['repository'],
+                'wheel_name': wheel.name, 'platform_tag': wheel.stem.rsplit('-',1)[-1],
+                'sha256': record['sha256'], 'provenance': record['provenance']}

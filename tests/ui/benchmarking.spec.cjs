@@ -25,6 +25,16 @@ async function chooseArtifact(page, form, path) {
   await page.getByRole('dialog').getByRole('button',{name:`Select file: ${path.slice(1)}`,exact:true}).click();
 }
 
+test('a delayed file-picker close event preserves a newer keyboard focus choice',async ({page})=>{
+  await fixture(page);
+  const form=page.locator('form[data-action=inspect]');
+  await chooseArtifact(page,form,'/candidate.whl');
+  const submit=form.getByRole('button',{name:'Inspect candidate',exact:true});
+  await submit.focus();
+  await page.locator('.benchmark-picker').evaluate(dialog=>dialog.dispatchEvent(new Event('close')));
+  await expect(submit).toBeFocused();
+});
+
 test('guided inspect, create and run submits authenticated actions and shows measured results', async ({page}) => {
   const state = await fixture(page);
   const inspect = page.locator('form[data-action=inspect]');

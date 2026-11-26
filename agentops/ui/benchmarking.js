@@ -275,7 +275,7 @@ else showHelp(input, hint);
   picker.setAttribute('aria-labelledby','benchmark-picker-title');
   picker.innerHTML = '<div class="benchmark-heading"><h3 id="benchmark-picker-title">Choose file</h3><button type="button" data-picker-close>Close</button></div><p id="benchmark-picker-status" role="status"></p><nav class="benchmark-picker-roots" aria-label="Filesystem roots"></nav><div class="benchmark-picker-location"><button type="button" data-picker-up>Up one folder</button><code id="benchmark-picker-directory"></code></div><div class="benchmark-picker-entries"></div>';
   document.body.append(picker);
-  let pickerInput, pickerTrigger, pickerKind, pickerParent, pickerDirectory, pickerBusy = false;
+let pickerInput, pickerKind, pickerParent, pickerDirectory, pickerBusy = false;
   const pickerStatus = picker.querySelector('#benchmark-picker-status');
   async function browse(path = '') {
     if (pickerBusy) return;
@@ -299,7 +299,6 @@ else showHelp(input, hint);
     } catch (error) { pickerStatus.textContent = error.message; }
     finally { pickerBusy = false; }
   }
-  picker.addEventListener('close',() => pickerTrigger?.focus());
   picker.addEventListener('click', event => {
     const button = event.target.closest('button'); if (!button) return;
     if (button.hasAttribute('data-picker-close')) picker.close();
@@ -393,7 +392,7 @@ else showHelp(input, hint);
     const button = event.target.closest('button'); if (!button) return;
     if (button.dataset.browse) {
       pickerInput = button.closest('.benchmark-field').querySelector('input');
-      pickerTrigger = button; pickerKind = button.dataset.kind;
+pickerKind = button.dataset.kind;
       picker.querySelector('#benchmark-picker-title').textContent = `Choose ${button.closest('.benchmark-field').querySelector('label').childNodes[0].textContent.toLowerCase()}`;
       picker.showModal(); await browse(pickerDirectory || ''); return;
     }
@@ -409,6 +408,16 @@ else showHelp(input, hint);
     finally { button.disabled = false; }
   });
   document.addEventListener('agentops-view', event => { visible = event.detail?.view === 'benchmarks'; if (visible) refresh(); });
+document.addEventListener('agentops-source-ready', event => {
+const source=event.detail;
+if (!source?.artifact || !/^[a-f0-9]{40}$/.test(source.sha || '')) return;
+root.querySelectorAll('form[data-action="inspect"] input[name="artifact"],form[data-action="run"] input[name="artifact"]').forEach(input=>input.value=source.artifact);
+root.querySelector('form[data-action="create"] input[name="candidate_sha"]').value=source.sha;
+const inspect=root.querySelector('form[data-action="inspect"]');
+inspect.querySelector('.benchmark-message').textContent=`Prepared ${source.wheel_name || 'candidate wheel'}. Choose a runner compatible with ${source.platform_tag || 'the wheel platform'}, then inspect the candidate.`;
+inspect.scrollIntoView({block:'center'});
+inspect.querySelector('button[type="submit"]').focus({preventScroll:true});
+});
   visible = !root.hidden;
   if (visible) refresh();
   setInterval(() => { if (visible && !document.hidden) refresh(); }, 2500);

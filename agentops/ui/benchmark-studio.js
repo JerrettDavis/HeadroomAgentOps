@@ -47,7 +47,7 @@
   }
   function renderHistory() {
     const section = root.querySelector('[data-studio-history]');
-    section.innerHTML = `<h3>Saved experiments</h3>${jobs.length ? `<div class="studio-history">${jobs.map(job => `<article><div><strong>${esc(job.id.slice(0,8))}</strong><small>${esc(job.created_at)}</small></div><span>${esc(job.state)} · simulator</span>${job.state === 'completed' ? `<button type="button" data-result="${esc(job.id)}">Explore results ${esc(job.id.slice(0,8))}</button>` : !terminal.has(job.state) ? `<button type="button" data-studio-cancel="${esc(job.id)}">Cancel experiment</button>` : '<small>Evidence unavailable. Inspect job diagnostics below.</small>'}</article>`).join('')}</div>` : '<p>No Studio runs yet. Start a demo above to create your first comparison.</p>'}`;
+    section.innerHTML = `<h3>Saved experiments</h3>${jobs.length ? `<div class="studio-history">${jobs.map(job => `<article><div><strong>${esc(job.label || job.id.slice(0,8))}</strong><small>${esc(job.created_at)}</small></div><span>${esc(job.state)} · simulator</span>${job.state === 'completed' ? `<button type="button" data-result="${esc(job.id)}">Explore results ${esc(job.id.slice(0,8))}</button>` : !terminal.has(job.state) ? `<button type="button" data-studio-cancel="${esc(job.id)}">Cancel experiment</button>` : '<small>Evidence unavailable. Inspect job diagnostics below.</small>'}</article>`).join('')}</div>` : '<p>No Studio runs yet. Start a demo above to create your first comparison.</p>'}`;
   }
   function renderResults(panel) {
     if (!result) { panel.innerHTML = '<h3>Experiment in progress</h3><p>Watching the durable job. You can leave this view and return to saved experiments.</p>'; return; }
