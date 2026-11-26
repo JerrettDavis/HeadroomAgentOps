@@ -127,6 +127,14 @@ class AutoReview:
                     if fingerprint(previous, omitted) != fingerprint(current, omitted):
                         return {'material': True, 'reason': 'review_context_changed',
                                 'source_job': job['id']}
+                from .maintenance_workflows import mechanical_update
+                if mechanical_update(self.launcher.root / 'ledger.sqlite3', self.data['repo'], pr,
+                                     previous['head_sha'], main_sha):
+                    record = {'material': False, 'reason': 'verified_mechanical_rebase',
+                              'head_sha': pr['head_sha'], 'main_sha': main_sha,
+                              'source_job': job['id'], 'scope': 'scheduling_only_no_approval'}
+                    notes[str(pr['number'])] = {**record, 'evidence': evidence.put(record)}
+                    return record
                 if (previous['head_sha'] == pr['head_sha'] and
                         isinstance(previous.get('files'), list) and pr.get('base_ref') and
                         previous.get('base_ref') == pr['base_ref'] and pr.get('head_repo') and

@@ -69,3 +69,15 @@ class MaintenanceStore:
             cursor = db.execute('INSERT OR IGNORE INTO records VALUES (?,?,?,?)',
                                 (self.repo, kind, str(key), json.dumps(body, allow_nan=False)))
             return cursor.rowcount == 1
+
+    def transition(self, kind, key, expected, data):
+        """Claim a queued record across threads and coordinator processes."""
+        with closing(self.connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT body FROM records WHERE repo=? AND kind=? AND key=?',
+                             (self.repo, kind, str(key))).fetchone()
+            prior = json.loads(row[0]) if row else {}
+            if prior.get('state') not in expected:
+                return False
+            self._write(db, kind, key, {**prior, **data})
+            return True
