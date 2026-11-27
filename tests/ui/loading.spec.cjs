@@ -1,5 +1,21 @@
 const {test, expect} = require('@playwright/test');
 
+test('a slow full ledger finishes instead of replacing valid data with a timeout', async ({page}) => {
+  await page.addInitScript(() => localStorage.setItem('agentops-view', 'reviews'));
+  let delayed = false;
+  await page.route('**/api/report*', async route => {
+    if (!delayed) {
+      delayed = true;
+      await new Promise(resolve => setTimeout(resolve, 16000));
+    }
+    await route.continue();
+  });
+  await page.goto('/');
+  await expect(page.locator('#queue .loading-placeholder')).toBeVisible();
+  await expect(page.locator('#queue .job').first()).toBeVisible({timeout: 25000});
+  await expect(page.locator('#connection')).not.toHaveClass('error');
+});
+
 test('removing a pending selection clears detail busy state', async ({page, request}) => {
   await page.addInitScript(() => localStorage.setItem('agentops-view', 'reviews'));
   await page.goto('/');
