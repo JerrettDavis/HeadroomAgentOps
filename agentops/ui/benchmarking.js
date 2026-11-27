@@ -389,10 +389,10 @@ let pickerInput, pickerKind, pickerParent, pickerDirectory, pickerBusy = false;
     if (payload.action === 'create' && !payload.inspection_id && !payload.inspection_path || payload.action === 'run' && !payload.experiment_id && !payload.manifest) {
       message.textContent = payload.action === 'create' ? 'Choose a completed inspection or enter its path.' : 'Choose a saved experiment or enter its manifest path.'; return;
     }
-    button.disabled = true; message.textContent = 'Submitting...';
-    try { await request('/api/benchmarks',payload); message.textContent = 'Job submitted. Follow its progress below.'; await refresh(); }
-    catch (error) { message.textContent = error.message; }
-    finally { button.disabled = false; }
+    button.disabled = true; window.agentopsFeedback.busy(button, true); message.textContent = 'Submitting…';
+    try { await request('/api/benchmarks',payload); message.textContent = 'Job submitted. Follow its progress below.'; window.agentopsFeedback.notify(message.textContent); await refresh(); }
+    catch (error) { message.textContent = error.message; window.agentopsFeedback.notify(error.message, 'error'); }
+    finally { button.disabled = false; window.agentopsFeedback.busy(button, false); }
   });
   root.addEventListener('click', async event => {
     const button = event.target.closest('button'); if (!button) return;
@@ -408,10 +408,10 @@ pickerKind = button.dataset.kind;
       catch { status.textContent = 'Copy is unavailable. Select and copy the displayed path.'; } return;
     }
     if (!button.dataset.cancel && !button.dataset.collect) return;
-    button.disabled = true;
-    try { await request(button.dataset.cancel ? '/api/benchmarks/cancel' : '/api/benchmarks', button.dataset.cancel ? {id:button.dataset.cancel} : {action:'collect',run_id:button.dataset.collect}); await refresh(); }
-    catch (error) { status.textContent = error.message; status.classList.add('error'); }
-    finally { button.disabled = false; }
+    button.disabled = true; window.agentopsFeedback.busy(button, true);
+    try { await request(button.dataset.cancel ? '/api/benchmarks/cancel' : '/api/benchmarks', button.dataset.cancel ? {id:button.dataset.cancel} : {action:'collect',run_id:button.dataset.collect}); window.agentopsFeedback.notify(button.dataset.cancel ? 'Cancellation requested.' : 'Collection submitted. Follow its progress below.'); await refresh(); }
+    catch (error) { status.textContent = error.message; status.classList.add('error'); window.agentopsFeedback.notify(error.message, 'error'); }
+    finally { button.disabled = false; window.agentopsFeedback.busy(button, false); }
   });
   document.addEventListener('agentops-view', event => { visible = event.detail?.view === 'benchmarks'; if (visible) refresh(); });
 document.addEventListener('agentops-source-ready', event => {

@@ -105,18 +105,20 @@
   }
   root.addEventListener('click', async event => {
     const button = event.target.closest('button');
-    if (!button) return;
+    if (!button || button.disabled || root.dataset.actionPending) return;
+    root.dataset.actionPending = 'true';
+    window.agentopsFeedback.busy(button, true);
     try {
       if (button.hasAttribute('data-demo')) { if (!catalogue) return; await launch(catalogue.templates[0].design); }
       else if (button.dataset.template) { design = structuredClone(catalogue.templates.find(t=>t.id === button.dataset.template).design); result = null; selectedJob = null; step = 1; render(); }
       else if (button.hasAttribute('data-continue')) { design = structuredClone(draft); result = null; selectedJob = null; step = 1; render(); }
       else if (button.hasAttribute('data-home')) { capture(); step = 0; render(); }
-      else if (button.hasAttribute('data-save')) { capture(); await request('/api/benchmarks/studio/draft',design); draft = structuredClone(design); status('Draft saved.'); }
+      else if (button.hasAttribute('data-save')) { capture(); await request('/api/benchmarks/studio/draft',design); draft = structuredClone(design); status('Draft saved.'); window.agentopsFeedback.notify('Draft saved.'); }
       else if (button.hasAttribute('data-next') || button.hasAttribute('data-back') || button.dataset.step) {
         capture(); await request('/api/benchmarks/studio/preview',design);
         await request('/api/benchmarks/studio/draft',design); draft = structuredClone(design);
         step = button.dataset.step ? Number(button.dataset.step) : step + (button.hasAttribute('data-next') ? 1 : -1);
-        render(); root.querySelector('[data-studio-step]').focus(); status('');
+        render(); root.querySelector('[data-studio-step]').focus(); window.agentopsFeedback.enter(root.querySelector('[data-studio-step]')); status('');
       }
       else if (button.hasAttribute('data-launch')) { capture(); await launch(design); }
       else if (button.dataset.result) await showResult(button.dataset.result);
@@ -126,7 +128,8 @@
         const url = URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));
         const link = document.createElement('a'); link.href=url; link.download=`benchmark-${selectedJob}.json`; link.click(); URL.revokeObjectURL(url);
       }
-    } catch (error) { status(error.message); }
+    } catch (error) { status(error.message); window.agentopsFeedback.notify(error.message, 'error'); }
+    finally { delete root.dataset.actionPending; window.agentopsFeedback.busy(button, false); }
   });
   document.addEventListener('agentops-view', event => { visible = event.detail?.view === 'benchmarks'; if (visible) refresh(); });
   setInterval(()=> { if (visible && !document.hidden) refresh(); },2000);

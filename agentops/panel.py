@@ -328,6 +328,8 @@ def make_server(path, host='127.0.0.1', port=8765, config=None, usage_reader=Non
         raise ValueError('The panel binds to loopback only')
     page = Path(__file__).with_name('panel.html')
     assets = {
+        '/ui/feedback.js': (page.parent / 'ui' / 'feedback.js', 'text/javascript; charset=utf-8'),
+        '/ui/feedback.css': (page.parent / 'ui' / 'feedback.css', 'text/css; charset=utf-8'),
         '/ui/maintenance.js': (page.parent / 'ui' / 'maintenance.js', 'text/javascript; charset=utf-8'),
         '/ui/maintenance.css': (page.parent / 'ui' / 'maintenance.css', 'text/css; charset=utf-8'),
         '/ui/benchmark-measured.js': (page.parent / 'ui' / 'benchmark-measured.js', 'text/javascript; charset=utf-8'),

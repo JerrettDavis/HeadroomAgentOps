@@ -33,7 +33,7 @@
   }
   async function post(action, payload) {
     if (busy) return;
-    busy = true; message = 'Submitting…'; render(true);
+    busy = true; message = 'Submitting…'; root.setAttribute('aria-busy', 'true'); render(true);
     try {
       if (!token) {
         const r = await fetch('/api/launcher'); if (!r.ok) throw Error('Dashboard connection unavailable');
@@ -43,8 +43,9 @@
         headers: {'Content-Type': 'application/json', 'X-Launch-Token': token}, body: JSON.stringify(payload)});
       const result = await r.json(); if (!r.ok) throw Error(result.error || 'Maintenance request failed');
       data = result; message = action === 'refresh' ? 'Refreshing PR inventory…' : 'Request saved. Progress appears below.';
-    } catch (error) { message = error.message; }
-    finally { busy = false; render(true); }
+      window.agentopsFeedback.notify(message);
+    } catch (error) { message = error.message; window.agentopsFeedback.notify(message, 'error'); }
+    finally { busy = false; root.removeAttribute('aria-busy'); render(true); }
   }
   function render(force = false) {
     if (!data) {
@@ -64,6 +65,7 @@
       label: active.getAttribute('aria-label') || active.textContent} : null;
     root.replaceChildren(el('h1', view === 'updates' ? 'PR updates' : 'Main CI'));
     const status = el('p', message, 'maintenance-status'); status.setAttribute('role', 'status'); root.append(status);
+    if (busy) status.classList.add('is-submitting');
     if (view === 'updates') renderUpdates(); else renderMain();
     root.scrollTop = scroll;
     if (focus) {
