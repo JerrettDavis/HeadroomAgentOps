@@ -1,0 +1,17 @@
+/* Small, finite movements orient the user without animating polling renders. */
+button,a,input,select{transition:background-color 140ms ease,border-color 140ms ease,color 140ms ease}
+button:disabled{cursor:default;opacity:.65}
+button[aria-busy=true]{cursor:progress}
+button[aria-busy=true]::after{content:"";display:inline-block;width:12px;height:12px;margin-inline-start:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:middle;animation:agentops-spin 900ms linear infinite}
+.maintenance-status.is-submitting::before{content:"";display:inline-block;width:12px;height:12px;margin-inline-end:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:agentops-spin 900ms linear infinite}
+.icon-button[aria-busy=true] svg{display:none}
+.icon-button[aria-busy=true]::after{margin:0;width:18px;height:18px}
+progress::-webkit-progress-value{transition:width 240ms ease}
+dialog[open]{animation:agentops-reveal 160ms ease-out}
+#action-notification{position:fixed;z-index:1000;inset:auto 24px 24px auto;display:flex;align-items:center;gap:16px;max-width:min(460px,calc(100vw - 32px));padding:12px 12px 12px 16px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-inline-start:3px solid var(--green);border-radius:10px;box-shadow:0 8px 32px #0002;overflow-wrap:anywhere;animation:agentops-reveal 160ms ease-out}
+#action-notification[data-kind=error]{border-inline-start-color:var(--red)}
+#action-notification button{flex-shrink:0;min-width:36px;min-height:36px;padding:2px;font-size:22px;background:transparent;border-color:transparent}
+@keyframes agentops-spin{to{transform:rotate(360deg)}}
+@keyframes agentops-reveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:760px){#action-notification{inset:auto 16px 16px 16px;max-width:none}}
+@media(prefers-reduced-motion:reduce){button,a,input,select,progress::-webkit-progress-value{transition:none!important}dialog[open],#action-notification,button[aria-busy=true]::after,.maintenance-status.is-submitting::before{animation:none!important}}
