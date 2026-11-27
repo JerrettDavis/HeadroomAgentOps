@@ -350,6 +350,8 @@ let pickerInput, pickerKind, pickerParent, pickerDirectory, pickerBusy = false;
   async function refresh() {
     if (loading) return;
     loading = true;
+    status.textContent = initialized ? 'Refreshing saved jobs… Previous results remain visible.' : 'Loading saved benchmark jobs…';
+    if (!initialized) root.querySelector('#benchmark-jobs').innerHTML = window.agentopsLoading.skeleton('Loading saved benchmark jobs…', 3);
     try {
       const data = await request('/api/benchmarks');
       jobs = data.jobs || [];

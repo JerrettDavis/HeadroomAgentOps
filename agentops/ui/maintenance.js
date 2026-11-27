@@ -52,6 +52,11 @@
       const status = el('p', message || 'Loading maintenance status…', 'maintenance-status');
       status.setAttribute('role', 'status');
       root.replaceChildren(el('h1', view === 'updates' ? 'PR updates' : 'Main CI'), status);
+      if (!message) {
+        const placeholder = el('div');
+        placeholder.innerHTML = window.agentopsLoading.skeleton('Loading saved operations and current checks…', 4);
+        root.append(placeholder);
+      }
       return;
     }
     const alert = document.getElementById('main-ci-alert');
@@ -211,5 +216,5 @@
     view = event.detail.view; render(true);
     poll().then(() => { if (view === 'updates' && data && !data.inventory?.fetched) post('refresh', {}); });
   });
-  poll(); setInterval(() => { if (!document.hidden) poll(); }, 5000);
+  render(true); poll(); setInterval(() => { if (!document.hidden) poll(); }, 5000);
 })();

@@ -1,4 +1,12 @@
 /* Small, finite movements orient the user without animating polling renders. */
+.loading-placeholder{padding:16px;min-height:100px}
+.summary>.empty{grid-column:1/-1;background:var(--panel)}
+.loading-caption{color:var(--muted);font-size:13px;margin-bottom:14px}
+.skeleton-row{padding:12px 0;border-bottom:1px solid var(--line)}
+.skeleton-line{display:block;height:12px;width:90%;border-radius:4px;background:var(--soft);animation:agentops-skeleton 1.6s ease-in-out infinite}
+.skeleton-line.short{width:56%;height:9px;margin-top:10px}
+@keyframes agentops-skeleton{50%{opacity:.4}}
+@media(prefers-reduced-motion:reduce){.skeleton-line{animation:none}}
 button,a,input,select{transition:background-color 140ms ease,border-color 140ms ease,color 140ms ease}
 button:disabled{cursor:default;opacity:.65}
 button[aria-busy=true]{cursor:progress}

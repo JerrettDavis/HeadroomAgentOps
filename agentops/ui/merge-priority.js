@@ -84,6 +84,8 @@
   async function refreshPriority() {
     if (busy || view !== 'priority') return;
     busy = true;
+    if (!snapshot) byId('priority-list').innerHTML = '<li class="priority-loading">' + window.agentopsLoading.skeleton('Loading current pull requests and checks…', 4) + '</li>';
+    byId('priority-status').textContent = snapshot ? 'Refreshing GitHub evidence… Previous results remain visible.' : 'Loading current GitHub PRs…';
     try {
       const response = await fetch('/api/merge-priority', {signal: AbortSignal.timeout(15000)});
       if (!response.ok) throw Error('Refresh unavailable');
